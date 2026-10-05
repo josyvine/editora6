@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,9 +27,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
+import com.vineyard.aivideostudio.media.tools.DetectedTargetBox
 import com.vineyard.aivideostudio.media.video.ExtractedFrame
 import com.vineyard.aivideostudio.ui.screens.tools.components.ToolsOverlayPreview
 
@@ -44,10 +50,36 @@ private val WarningYellow = Color(0xFFF59E0B)
 private val DangerRed = Color(0xFFEF4444)
 private val PurpleAccent = Color(0xFFA855F7)
 
+// Tool items mapping
+val ALL_EDITORA_TOOLS = listOf(
+    "blur_gaussian" to "Gaussian Optical Blur",
+    "blur_mosaic" to "Pixelated Mosaic Blur",
+    "privacy_box" to "Solid Privacy Box",
+    "emoji_pill" to "Privacy Lock Emoji Pill (🔒)",
+    "button_highlight" to "Button Highlight (Pulsing Brackets)",
+    "flashing_arrow" to "Flashing / Bouncing Arrow",
+    "spotlight" to "Spotlight (Dim Background)",
+    "highlight_circle" to "Highlight Circle / Ring",
+    "highlight_box" to "Standard Highlight Box",
+    "vertical_column" to "Vertical Pillar / Sidebar Frame"
+)
+
+val ALL_CATEGORIES = listOf(
+    "global_anywhere" to "Category: Global (Anywhere)",
+    "sidebar_menu" to "Category: Sidebar Menu",
+    "top_header" to "Category: Top Header Bar",
+    "settings_drawer" to "Category: Settings Drawer"
+)
+
 @Composable
 fun ToolsScreen(viewModel: ToolsViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     var selectedMainTab by remember { mutableIntStateOf(0) } // 0: Viewer, 1: Data, 2: Render
+
+    // Modal Slot Capture Dialog Triggered on 2nd Pause
+    if (uiState.slotStep == 3) {
+        SlotCaptureDialog(viewModel = viewModel, state = uiState)
+    }
 
     Column(
         modifier = Modifier
@@ -114,6 +146,9 @@ fun ToolsScreen(viewModel: ToolsViewModel) {
     }
 }
 
+// =========================================================================
+// TAB 1: STUDIO VIEWER
+// =========================================================================
 @Composable
 private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
     val videoPickerLauncher = rememberLauncherForActivityResult(
@@ -122,7 +157,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
         uri?.let { viewModel.setVideoUri(it) }
     }
 
-    // 1. VIDEO PLAYER (TOP)
+    // 1. VIDEO PLAYER & CONTROLS
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.Black),
         shape = RoundedCornerShape(10.dp),
@@ -141,14 +176,68 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             ) {
                 val currentFrame = state.frames.getOrNull(state.currentFrameIndex)
                 if (currentFrame != null) {
+                    val activeBoxes = mutableListOf<DetectedTargetBox>()
+                    
+                    // Add direct blurs
+                    activeBoxes.addAll(state.directBlurs[currentFrame.index] ?: emptyList())
+
+                    // Add active manual rules matches
+                    state.extractedOcrData[currentFrame.index]?.let { ocr ->
+                        for (rule in state.activeRules) {
+                            if (!rule.isZipSource) {
+                                val boxes = com.vineyard.aivideostudio.media.tools.SpatialClusterer.findMatchingBoundingBoxes(ocr.lines, rule.text)
+                                for (b in boxes) {
+                                    activeBoxes.add(
+                                        DetectedTargetBox(
+                                            x0 = b.x0, y0 = b.y0, width = b.width, height = b.height,
+                                            text = rule.text, tool = rule.tool, frame = currentFrame.index,
+                                            time = currentFrame.timeSeconds
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     ToolsOverlayPreview(
                         baseBitmap = currentFrame.thumbBitmap,
-                        activeBoxes = emptyList(),
+                        activeBoxes = if (currentFrame.isHighlightEnabled) activeBoxes else emptyList(),
                         currentTimeMs = (currentFrame.timeSeconds * 1000).toLong(),
-                        withArrow = true
+                        withArrow = state.isArrowPointerEnabled
                     )
                 } else {
                     Text("No Video Loaded", color = BorderColor)
+                }
+            }
+
+            // Slot Cycle Banner
+            if (state.frames.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1E1B4B))
+                        .border(1.dp, PurpleAccent)
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val cycleText = when (state.slotStep) {
+                        1 -> "Start: #${state.slotStartFrame} -> Resume to continue"
+                        2 -> "Slot from #${state.slotStartFrame}... Press Pause to end"
+                        else -> "Slot Cycle: Play video -> 1st Pause sets start"
+                    }
+                    Text(
+                        text = cycleText,
+                        color = if (state.slotStep == 1) SuccessGreen else if (state.slotStep == 2) PurpleAccent else AccentBlue,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Reset",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        modifier = Modifier.clickable { viewModel.resetSlotCycle() }
+                    )
                 }
             }
 
@@ -168,10 +257,10 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                         modifier = Modifier.weight(1f)
                     )
                     Text(
-                        text = if (state.frames.isNotEmpty()) "${state.frames[state.currentFrameIndex].timeFormatted}s" else "00:00.0",
+                        text = if (state.frames.isNotEmpty()) "${state.frames[state.currentFrameIndex].timeFormatted}s / ${state.frames.last().timeFormatted}s" else "00:00.0 / 00:00.0",
                         color = AccentBlue,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }
@@ -184,23 +273,33 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                         onClick = { viewModel.togglePlayPause() },
                         colors = ButtonDefaults.buttonColors(containerColor = if (state.isPlaying) WarningYellow else PrimaryBlue),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1.2f)
                     ) {
-                        Text(if (state.isPlaying) "Pause" else "Play", color = if (state.isPlaying) Color.Black else Color.White)
+                        Text(if (state.isPlaying) "Pause" else "Play", color = if (state.isPlaying) Color.Black else Color.White, fontSize = 12.sp)
                     }
                     Button(
-                        onClick = { viewModel.toggleAudioMute() },
+                        onClick = { viewModel.stepFrame(-1) },
                         colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
-                        shape = RoundedCornerShape(6.dp)
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Text(if (state.isAudioMuted) "🔇 OFF" else "🔊 ON", color = Color.White)
+                        Text("-1 Frame", color = Color.White, fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = { viewModel.stepFrame(1) },
+                        colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("+1 Frame", color = Color.White, fontSize = 11.sp)
                     }
                     Button(
                         onClick = { viewModel.scanCurrentFrame() },
                         colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
-                        shape = RoundedCornerShape(6.dp)
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1.2f)
                     ) {
-                        Text("Scan #${state.currentFrameIndex}", color = Color.White)
+                        Text("Scan #${state.currentFrameIndex}", color = Color.White, fontSize = 11.sp)
                     }
                 }
             }
@@ -229,20 +328,34 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             if (state.videoUri != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(
-                        onClick = { /* Default 12 FPS */ },
-                        shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("12 FPS (Original)", color = Color.White)
+                    var fpsExpanded by remember { mutableStateOf(false) }
+                    var selectedFps by remember { mutableIntStateOf(12) }
+
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { fpsExpanded = true },
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("$selectedFps FPS", color = Color.White, fontSize = 12.sp)
+                        }
+                        DropdownMenu(expanded = fpsExpanded, onDismissRequest = { fpsExpanded = false }) {
+                            listOf(1, 2, 4, 6, 10, 12).forEach { fps ->
+                                DropdownMenuItem(
+                                    text = { Text("$fps FPS ${if (fps == 12) "(Original)" else ""}") },
+                                    onClick = { selectedFps = fps; fpsExpanded = false }
+                                )
+                            }
+                        }
                     }
+
                     Button(
-                        onClick = { viewModel.extractAllFrames(12) },
+                        onClick = { viewModel.extractAllFrames(selectedFps) },
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                         shape = RoundedCornerShape(6.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Extract All")
+                        Text("Extract All", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -264,7 +377,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("All Video Frames (${state.frames.size})", fontSize = 11.sp, color = Color.Gray)
+                    Text("All Video Frames (${state.frames.size}) - Uncut Original Length", fontSize = 11.sp, color = Color.Gray)
                     Text("Tap toggle to unmark box", fontSize = 11.sp, color = AccentBlue)
                 }
                 Spacer(modifier = Modifier.height(6.dp))
@@ -274,6 +387,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                         FrameThumbnail(
                             frame = frame,
                             isActive = frame.index == state.currentFrameIndex,
+                            onToggle = { viewModel.toggleFrameHighlight(frame.index) },
                             onClick = { viewModel.seekToFrame(frame.index) }
                         )
                     }
@@ -282,7 +396,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
         }
     }
 
-    // 4. TARGET PANEL & RULES CARD
+    // 4. TARGET PANEL & RULES CARD (ALL CONTROLS RESTORED)
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
         shape = RoundedCornerShape(10.dp),
@@ -290,11 +404,21 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
         modifier = Modifier.fillMaxWidth()
     ) {
         var keyword by remember { mutableStateOf("") }
+        var selectedCategory by remember { mutableStateOf("global_anywhere") }
+        var selectedTool by remember { mutableStateOf("blur_gaussian") }
+        var categoryExpanded by remember { mutableStateOf(false) }
+        var toolExpanded by remember { mutableStateOf(false) }
+        var clusterExpanded by remember { mutableStateOf(false) }
+        var selectedClusterId by remember { mutableStateOf("all") }
+
         Column(Modifier.padding(10.dp)) {
             OutlinedTextField(
                 value = keyword,
-                onValueChange = { keyword = it },
-                placeholder = { Text("Target word (e.g. Playground)") },
+                onValueChange = { 
+                    keyword = it 
+                    viewModel.updateTargetClusters(it)
+                },
+                placeholder = { Text("Target word (e.g. Playground, Dashboard, Email)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
@@ -305,22 +429,121 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                 )
             )
             Spacer(modifier = Modifier.height(6.dp))
-            
+
+            // Dynamic Auto-Cluster Dropdown (Tab 1)
+            if (state.detectedClusters.size > 1) {
+                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                    OutlinedButton(
+                        onClick = { clusterExpanded = true },
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        border = BorderStroke(1.dp, AccentBlue),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF1E1B4B))
+                    ) {
+                        Text(
+                            text = if (selectedClusterId == "all") "🌐 All Locations (${state.detectedClusters.size} Found)" 
+                                   else state.detectedClusters.find { it.id.toString() == selectedClusterId }?.displayName ?: "Selected Location",
+                            color = AccentBlue, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1
+                        )
+                    }
+                    DropdownMenu(expanded = clusterExpanded, onDismissRequest = { clusterExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("🌐 All Locations (${state.detectedClusters.size} Found)") },
+                            onClick = { selectedClusterId = "all"; clusterExpanded = false }
+                        )
+                        state.detectedClusters.forEach { cl ->
+                            DropdownMenuItem(
+                                text = { Text(cl.displayName) },
+                                onClick = { selectedClusterId = cl.id.toString(); clusterExpanded = false }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Category Selector
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { categoryExpanded = true },
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(ALL_CATEGORIES.find { it.first == selectedCategory }?.second ?: "Category", color = Color.White, fontSize = 12.sp)
+                }
+                DropdownMenu(expanded = categoryExpanded, onDismissRequest = { categoryExpanded = false }) {
+                    ALL_CATEGORIES.forEach { (catId, catTitle) ->
+                        DropdownMenuItem(
+                            text = { Text(catTitle) },
+                            onClick = { selectedCategory = catId; categoryExpanded = false }
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Tool Selector & Lock Target Row
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(modifier = Modifier.weight(1f)) {
+                    OutlinedButton(
+                        onClick = { toolExpanded = true },
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(ALL_EDITORA_TOOLS.find { it.first == selectedTool }?.second ?: "Tool", color = AccentBlue, fontSize = 11.sp, maxLines = 1)
+                    }
+                    DropdownMenu(expanded = toolExpanded, onDismissRequest = { toolExpanded = false }) {
+                        ALL_EDITORA_TOOLS.forEach { (toolId, toolTitle) ->
+                            DropdownMenuItem(
+                                text = { Text(toolTitle) },
+                                onClick = { selectedTool = toolId; toolExpanded = false }
+                            )
+                        }
+                    }
+                }
+
                 Button(
                     onClick = { 
-                        viewModel.addTargetRule(keyword, "Global", "button_highlight")
+                        viewModel.addTargetRule(keyword, selectedCategory, selectedTool, selectedClusterId)
                         keyword = "" 
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
                     shape = RoundedCornerShape(6.dp),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(0.9f)
                 ) {
-                    Text("Lock Target", fontWeight = FontWeight.Bold)
+                    Text("Lock Target", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Arrow Checkbox & Discard Wrong Highlights Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = state.isArrowPointerEnabled,
+                        onCheckedChange = { viewModel.setArrowPointerEnabled(it) },
+                        colors = CheckboxDefaults.colors(checkedColor = AccentBlue)
+                    )
+                    Text("Arrow Pointer", color = Color.LightGray, fontSize = 12.sp)
+                }
+
+                Button(
+                    onClick = { viewModel.discardDriftHighlights() },
+                    colors = ButtonDefaults.buttonColors(containerColor = WarningYellow),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("Discard Wrong Highlights", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Active Rules Chips List
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -340,7 +563,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                                     .padding(horizontal = 6.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("[${rule.tool.uppercase()}] ${rule.text}", fontSize = 11.sp, color = WarningYellow)
+                                Text("[${rule.tool.uppercase()}] ${rule.text} [${rule.category}]", fontSize = 11.sp, color = WarningYellow)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     "[X]", 
@@ -359,7 +582,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
 }
 
 @Composable
-private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onClick: () -> Unit) {
+private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onToggle: () -> Unit, onClick: () -> Unit) {
     val borderColor = if (isActive) AccentBlue else if (frame.isHighlightEnabled) WarningYellow else BorderColor
     
     Box(
@@ -389,11 +612,13 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onClick: ()
             Text("${frame.timeFormatted}s", color = Color.White, fontSize = 9.sp)
         }
         
+        // Interactive Toggle Badge
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(2.dp)
                 .background(if (frame.isHighlightEnabled) WarningYellow else BorderColor, RoundedCornerShape(2.dp))
+                .clickable { onToggle() }
                 .padding(horizontal = 4.dp, vertical = 1.dp)
         ) {
             Text(
@@ -406,9 +631,12 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onClick: ()
     }
 }
 
+// =========================================================================
+// TAB 2: EXPORT DATA (3-STEP WIZARD)
+// =========================================================================
 @Composable
 private fun ExportDataWizardTab(viewModel: ToolsViewModel, state: ToolsUiState) {
-    // STEPPER HEADER
+    // Stepper Navigation Header
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -443,6 +671,7 @@ private fun ExportDataWizardTab(viewModel: ToolsViewModel, state: ToolsUiState) 
     }
 }
 
+// Step 1: Gemini AI Transcriber
 @Composable
 private fun WizardStep1(viewModel: ToolsViewModel, state: ToolsUiState) {
     Card(
@@ -452,33 +681,103 @@ private fun WizardStep1(viewModel: ToolsViewModel, state: ToolsUiState) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(10.dp)) {
-            var apiKey by remember { mutableStateOf("") }
-            
-            Text("🤖 Google Gemini AI Settings", color = AccentBlue, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = { apiKey = it },
-                placeholder = { Text("Enter Gemini API Key (AIzaSy...)") },
+            var apiKey by remember { mutableStateOf(state.geminiApiKey) }
+            var isKeyVisible by remember { mutableStateOf(false) }
+            var modelExpanded by remember { mutableStateOf(false) }
+            var selectedModel by remember { mutableStateOf(state.selectedGeminiModel) }
+
+            // Header with Fetch Models Button
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedContainerColor = BgDark,
-                    focusedContainerColor = BgDark,
-                    unfocusedBorderColor = BorderColor,
-                    focusedBorderColor = AccentBlue
-                )
-            )
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🤖 Google Gemini AI Settings", color = AccentBlue, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Button(
+                    onClick = { viewModel.fetchGeminiModels(apiKey) },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("🔄 Fetch Models", fontSize = 11.sp)
+                }
+            }
             Spacer(modifier = Modifier.height(8.dp))
             
-            Button(
-                onClick = { viewModel.transcribeAudioWithGemini(apiKey, "gemini-2.5-flash") },
-                colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("🎙️ Transcribe Audio with Gemini AI", fontWeight = FontWeight.Bold)
+            // Password Field with Eye Visibility Toggle
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { 
+                        apiKey = it
+                        viewModel.setGeminiApiKey(it)
+                    },
+                    placeholder = { Text("Enter Gemini API Key (AIzaSy...)") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedContainerColor = BgDark,
+                        focusedContainerColor = BgDark,
+                        unfocusedBorderColor = BorderColor,
+                        focusedBorderColor = AccentBlue
+                    )
+                )
+                Button(
+                    onClick = { isKeyVisible = !isKeyVisible },
+                    colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(if (isKeyVisible) "🙈" else "👁️")
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Gemini Model Selector Dropdown
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { modelExpanded = true },
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(selectedModel, color = AccentBlue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+                DropdownMenu(expanded = modelExpanded, onDismissRequest = { modelExpanded = false }) {
+                    state.availableGeminiModels.forEach { modelName ->
+                        DropdownMenuItem(
+                            text = { Text(modelName) },
+                            onClick = { 
+                                selectedModel = modelName
+                                viewModel.setSelectedGeminiModel(modelName)
+                                modelExpanded = false 
+                            }
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Transcribe and Download Transcript Buttons
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = { viewModel.transcribeAudioWithGemini(apiKey, selectedModel) },
+                    colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("🎙️ Transcribe Audio with Gemini AI", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                if (state.transcriptCues.isNotEmpty()) {
+                    Button(
+                        onClick = { viewModel.downloadTranscriptJson() },
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("💾 Download JSON", fontSize = 11.sp)
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -496,8 +795,21 @@ private fun WizardStep1(viewModel: ToolsViewModel, state: ToolsUiState) {
     }
 }
 
+// Step 2: Auto-Scan ZIP with Spatial, Temporal & Audio Sync
 @Composable
 private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
+    val localZipPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.processLocalZip(it) }
+    }
+
+    val externalTranscriptPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.loadExternalTranscriptFile(it) }
+    }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
         border = BorderStroke(1.dp, PurpleAccent),
@@ -505,11 +817,20 @@ private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
         modifier = Modifier.fillMaxWidth()
     ) {
         var filterText by remember { mutableStateOf("") }
+        var zipUrl by remember { mutableStateOf("https://raw.githubusercontent.com/josyvine/GitHub-zip/main/file/frames_timeline_data.zip") }
+        var selectedZipTool by remember { mutableStateOf("button_highlight") }
+        var audioFilterQuery by remember { mutableStateOf("") }
+
+        var zipToolExpanded by remember { mutableStateOf(false) }
+        var zipClusterExpanded by remember { mutableStateOf(false) }
+        var zipTimeSlotExpanded by remember { mutableStateOf(false) }
+        var audioCueExpanded by remember { mutableStateOf(false) }
 
         Column(Modifier.padding(10.dp)) {
             Text("Auto-Scan ZIP & Apply Editora4 Tool", color = Color(0xFFE9D5FF), fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Target word input
             OutlinedTextField(
                 value = filterText,
                 onValueChange = { filterText = it },
@@ -517,21 +838,212 @@ private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedContainerColor = BgDark,
-                    focusedContainerColor = BgDark,
-                    unfocusedBorderColor = BorderColor,
-                    focusedBorderColor = PurpleAccent
+                    unfocusedContainerColor = BgDark, focusedContainerColor = BgDark,
+                    unfocusedBorderColor = BorderColor, focusedBorderColor = PurpleAccent
                 )
             )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Dynamic Spatial Clusters Dropdown (Tab 2)
+            if (state.detectedZipClusters.size > 1) {
+                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                    OutlinedButton(
+                        onClick = { zipClusterExpanded = true },
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        border = BorderStroke(1.dp, AccentBlue),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF1E1B4B))
+                    ) {
+                        Text(
+                            text = if (state.selectedZipClusterId == "all") "🌐 All Locations (${state.detectedZipClusters.size} Found)"
+                                   else state.detectedZipClusters.find { it.id.toString() == state.selectedZipClusterId }?.displayName ?: "Selected Location",
+                            color = AccentBlue, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1
+                        )
+                    }
+                    DropdownMenu(expanded = zipClusterExpanded, onDismissRequest = { zipClusterExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("🌐 All Locations (${state.detectedZipClusters.size} Found)") },
+                            onClick = { viewModel.setZipClusterFilter("all"); zipClusterExpanded = false }
+                        )
+                        state.detectedZipClusters.forEach { cl ->
+                            DropdownMenuItem(
+                                text = { Text(cl.displayName) },
+                                onClick = { viewModel.setZipClusterFilter(cl.id.toString()); zipClusterExpanded = false }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Dynamic Timeline Session Windows Dropdown (Tab 2)
+            if (state.detectedZipTimeSlots.size > 1) {
+                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                    OutlinedButton(
+                        onClick = { zipTimeSlotExpanded = true },
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        border = BorderStroke(1.dp, WarningYellow),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF1E1B4B))
+                    ) {
+                        Text(
+                            text = if (state.selectedZipTimeSlotId == "all") "🌐 All Time Slots (${state.detectedZipTimeSlots.size} Sessions)"
+                                   else state.detectedZipTimeSlots.find { it.id.toString() == state.selectedZipTimeSlotId }?.displayName ?: "Selected Slot",
+                            color = WarningYellow, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1
+                        )
+                    }
+                    DropdownMenu(expanded = zipTimeSlotExpanded, onDismissRequest = { zipTimeSlotExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("🌐 All Time Slots (${state.detectedZipTimeSlots.size} Sessions)") },
+                            onClick = { viewModel.setZipTimeSlotFilter("all"); zipTimeSlotExpanded = false }
+                        )
+                        state.detectedZipTimeSlots.forEach { slot ->
+                            DropdownMenuItem(
+                                text = { Text(slot.displayName) },
+                                onClick = { viewModel.setZipTimeSlotFilter(slot.id.toString()); zipTimeSlotExpanded = false }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Audio Cue Sync Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0C1322)),
+                border = BorderStroke(1.dp, Color(0xFF1E293B)),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Column(Modifier.padding(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("🎙️ Audio Cue Sync (Spoken Intent Trigger)", color = AccentBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "+ Optional File (SRT/VTT)",
+                            color = Color.Gray,
+                            fontSize = 10.sp,
+                            modifier = Modifier.clickable { externalTranscriptPicker.launch("*/*") }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = audioFilterQuery,
+                            onValueChange = { 
+                                audioFilterQuery = it
+                                viewModel.filterAudioCues(it)
+                            },
+                            placeholder = { Text("Filter spoken words (e.g. 'click on') or '17s, 30s'") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedContainerColor = BgDark, focusedContainerColor = BgDark,
+                                unfocusedBorderColor = BorderColor, focusedBorderColor = WarningYellow
+                            )
+                        )
+                        Button(
+                            onClick = { viewModel.filterAudioCues(audioFilterQuery) },
+                            colors = ButtonDefaults.buttonColors(containerColor = WarningYellow),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text("Find Cues", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+
+                    // Dynamic Audio Cue Dropdown
+                    if (state.detectedAudioCues.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { audioCueExpanded = true },
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                                border = BorderStroke(1.dp, DangerRed),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF1E1B4B))
+                            ) {
+                                Text(
+                                    text = if (state.selectedAudioCueId == "all") "🌐 All Spoken Cues (${state.detectedAudioCues.size} Cues)"
+                                           else state.detectedAudioCues.find { it.id.toString() == state.selectedAudioCueId }?.let { "🎙️ Cue: ${it.timeStr} (\"${it.snippet}\")" } ?: "Selected Cue",
+                                    color = DangerRed, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1
+                                )
+                            }
+                            DropdownMenu(expanded = audioCueExpanded, onDismissRequest = { audioCueExpanded = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("🌐 All Spoken Cues (${state.detectedAudioCues.size} Cues)") },
+                                    onClick = { viewModel.setAudioCueFilter("all"); audioCueExpanded = false }
+                                )
+                                state.detectedAudioCues.forEach { cue ->
+                                    DropdownMenuItem(
+                                        text = { Text("🎙️ Cue ${cue.id + 1}: ${cue.startTime}s ➔ ${cue.endTime}s (\"${cue.snippet}\")") },
+                                        onClick = { viewModel.setAudioCueFilter(cue.id.toString()); audioCueExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Tool Selector
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { zipToolExpanded = true },
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(ALL_EDITORA_TOOLS.find { it.first == selectedZipTool }?.second ?: "Select Tool", color = AccentBlue, fontSize = 12.sp)
+                }
+                DropdownMenu(expanded = zipToolExpanded, onDismissRequest = { zipToolExpanded = false }) {
+                    ALL_EDITORA_TOOLS.forEach { (toolId, toolTitle) ->
+                        DropdownMenuItem(
+                            text = { Text(toolTitle) },
+                            onClick = { selectedZipTool = toolId; zipToolExpanded = false }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // ZIP URL Input
+            OutlinedTextField(
+                value = zipUrl,
+                onValueChange = { zipUrl = it },
+                placeholder = { Text("ZIP Archive URL") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = BgDark, focusedContainerColor = BgDark,
+                    unfocusedBorderColor = BorderColor, focusedBorderColor = AccentBlue
+                )
+            )
+
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
-                onClick = { /* Action handled via NativeTimelineZipManager */ },
-                colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Fetch ZIP & Apply Tool", fontWeight = FontWeight.Bold)
+            // Action Buttons: URL Fetch OR Device Pick
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = { viewModel.fetchZipFromUrl(zipUrl, filterText, selectedZipTool) },
+                    colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Fetch ZIP & Apply", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+
+                Button(
+                    onClick = { localZipPicker.launch("application/zip") },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Pick ZIP from Device", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
             }
         }
     }
@@ -543,7 +1055,7 @@ private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
             colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
             modifier = Modifier.weight(1f)
         ) {
-            Text("⬅ Back", color = Color.White)
+            Text("⬅ Back: Gemini AI", color = Color.White)
         }
         Button(
             onClick = { viewModel.setWizardStep(3) },
@@ -555,9 +1067,11 @@ private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
     }
 }
 
+// Step 3: Coordinates JSON & Frame ZIP Exporter
 @Composable
 private fun WizardStep3(viewModel: ToolsViewModel, state: ToolsUiState) {
     val clipboardManager = LocalClipboardManager.current
+    var pastedJson by remember { mutableStateOf(state.exportedCoordinatesJson) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -571,32 +1085,69 @@ private fun WizardStep3(viewModel: ToolsViewModel, state: ToolsUiState) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Active Highlight Coordinates (JSON)", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
-                Button(
-                    onClick = { clipboardManager.setText(AnnotatedString("{\n  \"frames\": []\n}")) },
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                    shape = RoundedCornerShape(4.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("Copy", fontSize = 11.sp)
+                Text("Active Highlight Coordinates (JSON)", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Button(
+                        onClick = { viewModel.applyPastedJson(pastedJson) },
+                        colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                        shape = RoundedCornerShape(4.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("Apply to Video", fontSize = 10.sp)
+                    }
+                    Button(
+                        onClick = { clipboardManager.setText(AnnotatedString(pastedJson)) },
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                        shape = RoundedCornerShape(4.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("Copy", fontSize = 10.sp)
+                    }
+                    Button(
+                        onClick = { viewModel.downloadCoordinatesJson() },
+                        colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                        shape = RoundedCornerShape(4.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("Download", fontSize = 10.sp)
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
             
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(180.dp)
-                    .background(BgDark, RoundedCornerShape(6.dp))
-                    .border(1.dp, BorderColor, RoundedCornerShape(6.dp))
-                    .padding(8.dp)
-            ) {
-                Text(
-                    text = "{\n  \"target\": \"Playground\",\n  \"total_highlighted_frames\": ${state.frames.count { it.isHighlightEnabled }}\n}",
-                    color = AccentBlue,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp
+            OutlinedTextField(
+                value = pastedJson,
+                onValueChange = { pastedJson = it },
+                placeholder = { Text("Paste or view highlight coordinates here...") },
+                modifier = Modifier.fillMaxWidth().height(180.dp),
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = AccentBlue),
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = BgDark, focusedContainerColor = BgDark,
+                    unfocusedBorderColor = BorderColor, focusedBorderColor = AccentBlue
                 )
+            )
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // ZIP Packager Card
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+        border = BorderStroke(1.dp, BorderColor),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Text("Export All Frames as ZIP", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Button(
+                onClick = { viewModel.downloadTimelineZip() },
+                colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Download All as ZIP (fr1.timeline.txt, ...)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
         }
     }
@@ -611,6 +1162,7 @@ private fun WizardStep3(viewModel: ToolsViewModel, state: ToolsUiState) {
     }
 }
 
+// Full-Width Diagnostic Log Console
 @Composable
 private fun TerminalConsole(viewModel: ToolsViewModel, state: ToolsUiState) {
     val clipboardManager = LocalClipboardManager.current
@@ -673,6 +1225,9 @@ private fun TerminalConsole(viewModel: ToolsViewModel, state: ToolsUiState) {
     }
 }
 
+// =========================================================================
+// TAB 3: RENDER VIDEO WITH REAL-TIME PROGRESS BAR
+// =========================================================================
 @Composable
 private fun RenderVideoTab(viewModel: ToolsViewModel, state: ToolsUiState) {
     Card(
@@ -692,12 +1247,101 @@ private fun RenderVideoTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             
             Spacer(modifier = Modifier.height(12.dp))
             Button(
-                onClick = { /* Render Video Call via Media3 */ },
+                onClick = { viewModel.renderFullVideo() },
+                enabled = !state.isRendering,
                 colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Download Full Video With Highlights & Audio", fontWeight = FontWeight.Bold)
+                Text(
+                    if (state.isRendering) "Rendering in Progress..." else "Download Full Video With Highlights & Audio",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // Real-Time Animated Rendering Progress Bar Container
+            if (state.isRendering) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(state.renderProgressStatus, color = Color.White, fontSize = 11.sp)
+                    Text("${state.renderPercent}%", color = AccentBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { state.renderPercent / 100f },
+                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                    color = AccentBlue,
+                    trackColor = SurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+// Target Slot Capture Modal Dialog (Triggered on 2nd Pause)
+@Composable
+private fun SlotCaptureDialog(viewModel: ToolsViewModel, state: ToolsUiState) {
+    val start = state.slotStartFrame ?: 0
+    val end = state.slotEndFrame ?: 0
+    val minF = minOf(start, end)
+    val maxF = maxOf(start, end)
+    val count = maxF - minF + 1
+
+    Dialog(onDismissRequest = { viewModel.resetSlotCycle() }) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            border = BorderStroke(2.dp, PurpleAccent),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Target Slot Captured", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SurfaceVariant, RoundedCornerShape(6.dp))
+                        .border(1.dp, BorderColor, RoundedCornerShape(6.dp))
+                        .padding(8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Frame #$minF -> #$maxF ($count frames)",
+                        color = Color(0xFFE9D5FF),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Ultra-Fast Engine: 50 frames concurrently", color = AccentBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Button(
+                    onClick = { viewModel.scanCapturedSlot() },
+                    colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Ultra-Fast Scan Slot (50 at a time)", fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Button(
+                    onClick = { viewModel.resetSlotCycle() },
+                    colors = ButtonDefaults.buttonColors(containerColor = DangerRed),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Close and Continue Playback")
+                }
             }
         }
     }
