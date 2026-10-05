@@ -30,6 +30,8 @@ import com.vineyard.aivideostudio.ui.screens.projects.ProjectsScreen
 import com.vineyard.aivideostudio.ui.screens.projects.ProjectsViewModel
 import com.vineyard.aivideostudio.ui.screens.settings.SettingsScreen
 import com.vineyard.aivideostudio.ui.screens.settings.SettingsViewModel
+import com.vineyard.aivideostudio.ui.screens.tools.ToolsScreen
+import com.vineyard.aivideostudio.ui.screens.tools.ToolsViewModel
 
 @Composable
 fun AppNavGraph(
@@ -50,119 +52,133 @@ fun AppNavGraph(
                 startDestination = Screen.Home.route,
                 modifier = Modifier.fillMaxSize()
             ) {
-            composable(Screen.Home.route) {
-                val homeViewModel = remember {
-                    HomeViewModel(
-                        container.projectRepository,
-                        container.modelRepository,
-                        container.geminiPreferences
-                    )
-                }
-                HomeScreen(
-                    viewModel = homeViewModel,
-                    onCreateProject = { navController.navigate(Screen.Create.route) },
-                    onOpenProject = { projectId ->
-                        navController.navigate(Screen.Processing.createRoute(projectId))
-                    },
-                    onOpenSettings = { navController.navigate(Screen.Settings.route) },
-                    onOpenProjects = { navController.navigate(Screen.Projects.route) }
-                )
-            }
-
-            composable(Screen.Projects.route) {
-                val projectsViewModel = remember {
-                    ProjectsViewModel(
-                        container.projectRepository,
-                        container.projectStorageManager
-                    )
-                }
-                ProjectsScreen(
-                    viewModel = projectsViewModel,
-                    onOpenProject = { projectId ->
-                        navController.navigate(Screen.Processing.createRoute(projectId))
+                composable(Screen.Home.route) {
+                    val homeViewModel = remember {
+                        HomeViewModel(
+                            container.projectRepository,
+                            container.modelRepository,
+                            container.geminiPreferences
+                        )
                     }
-                )
-            }
-
-            composable(Screen.Create.route) {
-                val createViewModel = remember {
-                    CreateViewModel(
-                        context,
-                        container.projectRepository,
-                        container.projectStorageManager,
-                        container.videoMetadataReader
+                    HomeScreen(
+                        viewModel = homeViewModel,
+                        onCreateProject = { navController.navigate(Screen.Create.route) },
+                        onOpenProject = { projectId ->
+                            navController.navigate(Screen.Processing.createRoute(projectId))
+                        },
+                        onOpenSettings = { navController.navigate(Screen.Settings.route) },
+                        onOpenProjects = { navController.navigate(Screen.Projects.route) }
                     )
                 }
-                CreateScreen(
-                    viewModel = createViewModel,
-                    onProjectCreated = { projectId ->
-                        navController.navigate(Screen.Processing.createRoute(projectId)) {
-                            popUpTo(Screen.Home.route)
+
+                composable(Screen.Projects.route) {
+                    val projectsViewModel = remember {
+                        ProjectsViewModel(
+                            container.projectRepository,
+                            container.projectStorageManager
+                        )
+                    }
+                    ProjectsScreen(
+                        viewModel = projectsViewModel,
+                        onOpenProject = { projectId ->
+                            navController.navigate(Screen.Processing.createRoute(projectId))
                         }
+                    )
+                }
+
+                composable(Screen.Create.route) {
+                    val createViewModel = remember {
+                        CreateViewModel(
+                            context,
+                            container.projectRepository,
+                            container.projectStorageManager,
+                            container.videoMetadataReader
+                        )
                     }
-                )
-            }
-
-            composable(Screen.Activity.route) {
-                val activityViewModel = remember {
-                    ActivityViewModel(container.logger)
-                }
-                ActivityScreen(viewModel = activityViewModel)
-            }
-
-            composable(Screen.Settings.route) {
-                val settingsViewModel = remember {
-                    SettingsViewModel(
-                        container.geminiPreferences,
-                        container.processingPreferences,
-                        container.modelRepository,
-                        container.voiceRepository
+                    CreateScreen(
+                        viewModel = createViewModel,
+                        onProjectCreated = { projectId ->
+                            navController.navigate(Screen.Processing.createRoute(projectId)) {
+                                popUpTo(Screen.Home.route)
+                            }
+                        }
                     )
                 }
-                SettingsScreen(viewModel = settingsViewModel)
-            }
 
-            composable(
-                route = Screen.Processing.route,
-                arguments = listOf(navArgument("projectId") { type = NavType.StringType })
-            ) { backStackEntry ->
-                val projectId = backStackEntry.arguments?.getString("projectId") ?: ""
-                val processingViewModel = remember(projectId) {
-                    ProcessingViewModel(
-                        projectId = projectId,
-                        controller = container.processingController,
-                        projectRepository = container.projectRepository
-                    )
-                }
-                ProcessingScreen(
-                    viewModel = processingViewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onOpenEditor = { id ->
-                        navController.navigate(Screen.Editor.createRoute(id))
+                // NEW: Tools Workstation Routing
+                composable(Screen.Tools.route) {
+                    val toolsViewModel = remember {
+                        ToolsViewModel(
+                            application = app,
+                            preferencesRepository = container.geminiPreferences,
+                            frameExtractor = container.fastNativeFrameExtractor,
+                            ocrEngine = container.nativeBatchOcrEngine,
+                            audioExtractor = container.audioExtractor
+                        )
                     }
-                )
-            }
+                    ToolsScreen(viewModel = toolsViewModel)
+                }
 
-            composable(
-                route = Screen.Editor.route,
-                arguments = listOf(navArgument("projectId") { type = NavType.StringType })
-            ) { backStackEntry ->
-                val projectId = backStackEntry.arguments?.getString("projectId") ?: ""
-                val editorViewModel = remember(projectId) {
-                    EditorViewModel(
-                        projectId = projectId,
-                        projectRepository = container.projectRepository
+                composable(Screen.Activity.route) {
+                    val activityViewModel = remember {
+                        ActivityViewModel(container.logger)
+                    }
+                    ActivityScreen(viewModel = activityViewModel)
+                }
+
+                composable(Screen.Settings.route) {
+                    val settingsViewModel = remember {
+                        SettingsViewModel(
+                            container.geminiPreferences,
+                            container.processingPreferences,
+                            container.modelRepository,
+                            container.voiceRepository
+                        )
+                    }
+                    SettingsScreen(viewModel = settingsViewModel)
+                }
+
+                composable(
+                    route = Screen.Processing.route,
+                    arguments = listOf(navArgument("projectId") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val projectId = backStackEntry.arguments?.getString("projectId") ?: ""
+                    val processingViewModel = remember(projectId) {
+                        ProcessingViewModel(
+                            projectId = projectId,
+                            controller = container.processingController,
+                            projectRepository = container.projectRepository
+                        )
+                    }
+                    ProcessingScreen(
+                        viewModel = processingViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onOpenEditor = { id ->
+                            navController.navigate(Screen.Editor.createRoute(id))
+                        }
                     )
                 }
-                EditorScreen(
-                    viewModel = editorViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
+
+                composable(
+                    route = Screen.Editor.route,
+                    arguments = listOf(navArgument("projectId") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val projectId = backStackEntry.arguments?.getString("projectId") ?: ""
+                    val editorViewModel = remember(projectId) {
+                        EditorViewModel(
+                            projectId = projectId,
+                            projectRepository = container.projectRepository
+                        )
+                    }
+                    EditorScreen(
+                        viewModel = editorViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
             }
+
+            // Floating Log Console overlay available globally across all screens
+            FloatingLogConsole(logger = container.logger)
         }
-
-        // Floating Log Console overlay available globally across all screens
-        FloatingLogConsole(logger = container.logger)
     }
-}
 }
