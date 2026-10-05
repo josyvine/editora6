@@ -110,7 +110,7 @@ fun AppNavGraph(
                     val toolsViewModel = remember {
                         ToolsViewModel(
                             application = app,
-                            preferencesRepository = container.geminiPreferences,
+                            geminiPreferences = container.geminiPreferences,
                             frameExtractor = container.fastNativeFrameExtractor,
                             ocrEngine = container.nativeBatchOcrEngine,
                             audioExtractor = container.audioExtractor
