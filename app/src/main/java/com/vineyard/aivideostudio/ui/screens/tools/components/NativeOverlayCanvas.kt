@@ -496,4 +496,28 @@ object NativeOverlayRenderer {
                 paint.color = android.graphics.Color.parseColor("#FFF59E0B")
                 paint.style = AndroidPaint.Style.STROKE
                 paint.strokeWidth = 3f
-                canvas.drawRect(x0 - 3f, y0 - 3f, x0 + width +
+                canvas.drawRect(x0 - 3f, y0 - 3f, x0 + width + 3f, y0 + height + 3f, paint)
+
+                if (withArrow) {
+                    val arrowLength = max(28f, canvas.width * 0.04f)
+                    val startX = max(5f, x0 - 6f - arrowLength)
+                    val startY = y0 + (height / 2f)
+
+                    paint.color = android.graphics.Color.parseColor("#FFEF4444")
+                    paint.strokeWidth = 4f
+                    canvas.drawLine(startX, startY, x0 - 6f, startY, paint)
+
+                    val head = max(8f, arrowLength * 0.28f)
+                    val arrowHeadPath = AndroidPath().apply {
+                        moveTo(x0 - 6f, startY)
+                        lineTo(x0 - 6f - head, startY - (head * 0.7f))
+                        lineTo(x0 - 6f - head, startY + (head * 0.7f))
+                        close()
+                    }
+                    paint.style = AndroidPaint.Style.FILL
+                    canvas.drawPath(arrowHeadPath, paint)
+                }
+            }
+        }
+    }
+}
