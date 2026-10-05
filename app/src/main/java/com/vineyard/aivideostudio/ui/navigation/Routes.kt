@@ -4,10 +4,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AddCircleOutline
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
@@ -22,6 +24,7 @@ sealed class Screen(
     object Home : Screen("home", "Home", Icons.Filled.Home, Icons.Outlined.Home)
     object Projects : Screen("projects", "Projects", Icons.Filled.Folder, Icons.Outlined.Folder)
     object Create : Screen("create", "Create", Icons.Filled.AddCircle, Icons.Outlined.AddCircleOutline)
+    object Tools : Screen("tools", "Tools", Icons.Filled.Build, Icons.Outlined.Build)
     object Activity : Screen("activity", "Activity", Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt)
     object Settings : Screen("settings", "Settings", Icons.Filled.Settings, Icons.Outlined.Settings)
 
@@ -35,6 +38,7 @@ sealed class Screen(
     }
 
     companion object {
-        val bottomNavItems = listOf(Home, Projects, Create, Activity, Settings)
+        // Appended Tools directly after Create for optimal UX
+        val bottomNavItems = listOf(Home, Projects, Create, Tools, Activity, Settings)
     }
 }
