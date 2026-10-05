@@ -4,10 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.io.InputStreamReader
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.util.regex.Pattern
@@ -104,8 +103,12 @@ object NativeTimelineZipManager {
                 zipIn.closeEntry()
                 entry = zipIn.nextEntry
             }
+        } catch (_: Exception) {
+            // Safe stream handling on EOF / closed streams
         } finally {
-            zipIn.close()
+            try {
+                zipIn.close()
+            } catch (_: Exception) {}
         }
 
         // Sort frames sequentially
@@ -126,17 +129,21 @@ object NativeTimelineZipManager {
                     val lineText = lineObj.optString("text", "")
                     val lineClean = SpatialClusterer.clean(lineText)
 
-                    val isMatch = lineClean.contains(cleanTarget) ||
+                    val isMatch = cleanTarget.isEmpty() || lineClean.contains(cleanTarget) ||
                             (userPart.length >= 4 && lineClean.contains(userPart))
 
                     if (isMatch) {
-                        val bboxObj = lineObj.getJSONObject("bbox")
-                        val lineBox = ToolsBoundingBox(
-                            x0 = bboxObj.getDouble("x0").toFloat(),
-                            y0 = bboxObj.getDouble("y0").toFloat(),
-                            width = bboxObj.getDouble("width").toFloat(),
-                            height = bboxObj.getDouble("height").toFloat()
-                        )
+                        val bboxObj = lineObj.optJSONObject("bbox")
+                        val lineBox = if (bboxObj != null) {
+                            ToolsBoundingBox(
+                                x0 = bboxObj.optDouble("x0", 0.0).toFloat(),
+                                y0 = bboxObj.optDouble("y0", 0.0).toFloat(),
+                                width = bboxObj.optDouble("width", 100.0).toFloat(),
+                                height = bboxObj.optDouble("height", 30.0).toFloat()
+                            )
+                        } else {
+                            ToolsBoundingBox(0f, 0f, 100f, 30f)
+                        }
 
                         val wordsArray = lineObj.optJSONArray("words") ?: JSONArray()
                         val matchedWordBoxes = mutableListOf<ToolsBoundingBox>()
@@ -146,16 +153,18 @@ object NativeTimelineZipManager {
                             val wordText = wordObj.optString("text", "")
                             val wordClean = SpatialClusterer.clean(wordText)
 
-                            if (wordClean.contains(cleanTarget) || (userPart.length >= 4 && wordClean.contains(userPart))) {
-                                val wb = wordObj.getJSONObject("bbox")
-                                matchedWordBoxes.add(
-                                    ToolsBoundingBox(
-                                        x0 = wb.getDouble("x0").toFloat(),
-                                        y0 = wb.getDouble("y0").toFloat(),
-                                        width = wb.getDouble("width").toFloat(),
-                                        height = wb.getDouble("height").toFloat()
+                            if (cleanTarget.isEmpty() || wordClean.contains(cleanTarget) || (userPart.length >= 4 && wordClean.contains(userPart))) {
+                                val wb = wordObj.optJSONObject("bbox")
+                                if (wb != null) {
+                                    matchedWordBoxes.add(
+                                        ToolsBoundingBox(
+                                            x0 = wb.optDouble("x0", 0.0).toFloat(),
+                                            y0 = wb.optDouble("y0", 0.0).toFloat(),
+                                            width = wb.optDouble("width", 50.0).toFloat(),
+                                            height = wb.optDouble("height", 25.0).toFloat()
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
 
@@ -196,7 +205,7 @@ object NativeTimelineZipManager {
                     }
                 }
             } catch (_: Exception) {
-                // Ignore malformed JSON entries and continue streaming
+                // Skip malformed frame JSON without breaking batch parse
             }
         }
 
@@ -239,8 +248,7 @@ object NativeTimelineZipManager {
                     }
                 }
                 if (results.isNotEmpty()) return results
-            } catch (_: Exception) {
-            }
+            } catch (_: Exception) {}
         }
 
         // 2. Standard SRT / WebVTT timestamp parsing
