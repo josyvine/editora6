@@ -271,7 +271,7 @@ class ToolsViewModel(
             newSlotStep = 1
         } else if (state.slotStep == 2) {
             newSlotEnd = state.currentFrameIndex
-            newSlotStep = 3 // Trigger slot modal
+            newSlotStep = 3
         }
 
         _uiState.update { it.copy(
@@ -494,7 +494,7 @@ class ToolsViewModel(
     // GEMINI SETTINGS & LIVE MODEL DISCOVERY (STEP 1)
     // =========================================================
     fun setGeminiApiKey(key: String) {
-        geminiPreferences.saveApiKey(key.trim())
+        geminiPreferences.setApiKey(key.trim())
         _uiState.update { it.copy(geminiApiKey = key.trim()) }
     }
 
