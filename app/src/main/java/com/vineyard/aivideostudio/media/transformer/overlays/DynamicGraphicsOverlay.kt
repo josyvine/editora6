@@ -20,6 +20,7 @@ import com.vineyard.aivideostudio.core.model.effects.TrackingIndicatorSpec
 import com.vineyard.aivideostudio.core.model.effects.TrackingKeyframe
 import com.vineyard.aivideostudio.core.model.effects.TrackingStyle
 import java.io.File
+import kotlin.math.max
 import kotlin.math.sin
 
 /**
@@ -209,7 +210,7 @@ class DynamicGraphicsOverlay(
 
             when (indicator.style) {
                 TrackingStyle.BUTTON_HIGHLIGHT -> {
-                    // Pulsating highlight box for UI buttons and icons
+                    // Pulsating highlight box (Matches NativeOverlayCanvas.kt parity exactly)
                     val pulse = (sin(currentTimeMs * 0.010) * 0.5 + 0.5).toFloat()
                     val strokeW = (indicator.strokeWidthPx * scaleFactor) + (pulse * 2.5f * scaleFactor)
 
@@ -217,7 +218,7 @@ class DynamicGraphicsOverlay(
                     strokePaint.strokeWidth = strokeW
                     strokePaint.alpha = (180 + (pulse * 75)).toInt().coerceIn(0, 255)
 
-                    val pad = (8f * scaleFactor) + (pulse * 4f * scaleFactor)
+                    val pad = (6f * scaleFactor) + (pulse * 4f * scaleFactor)
                     val highlightRect = RectF(
                         (rect.left - pad).coerceAtLeast(0f),
                         (rect.top - pad).coerceAtLeast(0f),
@@ -225,13 +226,11 @@ class DynamicGraphicsOverlay(
                         (rect.bottom + pad).coerceAtMost(canvasHeight)
                     )
 
-                    // Subtle pulsating translucent fill to make target area unmistakable
                     fillPaint.color = baseColor
-                    fillPaint.alpha = (25 + (pulse * 30)).toInt()
+                    fillPaint.alpha = (30 + (pulse * 56)).toInt()
                     val cornerRadius = 8f * scaleFactor
                     canvas.drawRoundRect(highlightRect, cornerRadius, cornerRadius, fillPaint)
 
-                    // High-visibility rounded stroke & corner brackets
                     canvas.drawRoundRect(highlightRect, cornerRadius, cornerRadius, strokePaint)
                     drawCornerBrackets(canvas, highlightRect, strokePaint)
 
@@ -245,6 +244,12 @@ class DynamicGraphicsOverlay(
                     strokePaint.strokeWidth = indicator.strokeWidthPx * scaleFactor
                     val pillarRect = RectF(rect.left, 40f * scaleFactor, rect.right, canvasHeight - (40f * scaleFactor))
                     val cornerRadius = 24f * scaleFactor
+                    
+                    fillPaint.color = baseColor
+                    fillPaint.alpha = 30
+                    canvas.drawRoundRect(pillarRect, cornerRadius, cornerRadius, fillPaint)
+
+                    strokePaint.alpha = 216
                     canvas.drawRoundRect(pillarRect, cornerRadius, cornerRadius, strokePaint)
 
                     indicator.label?.let { label ->
@@ -270,7 +275,7 @@ class DynamicGraphicsOverlay(
                 TrackingStyle.HIGHLIGHT_CIRCLE -> {
                     strokePaint.color = baseColor
                     strokePaint.strokeWidth = indicator.strokeWidthPx * scaleFactor
-                    val radius = (rect.width().coerceAtLeast(rect.height()) / 2f) + (6f * scaleFactor)
+                    val radius = (rect.width().coerceAtLeast(rect.height()) / 2f) + (8f * scaleFactor)
                     canvas.drawCircle(rect.centerX(), rect.centerY(), radius, strokePaint)
                 }
 
@@ -305,7 +310,6 @@ class DynamicGraphicsOverlay(
 
         when (direction) {
             ArrowDirection.DOWN -> {
-                // Pin arrow tip squarely onto the physical upper perimeter of the target
                 val tipX = targetRect.centerX().coerceIn(arrowWidth / 2f + 4f, canvasWidth - arrowWidth / 2f - 4f)
                 val tipY = (targetRect.top + (bounceOffset * 0.4f)).coerceIn(arrowLength + 4f, canvasHeight - 4f)
                 arrowPath.moveTo(tipX, tipY)
@@ -313,7 +317,6 @@ class DynamicGraphicsOverlay(
                 arrowPath.lineTo(tipX + (arrowWidth / 2f), tipY - arrowLength)
             }
             ArrowDirection.UP -> {
-                // Pin arrow tip squarely onto the physical bottom perimeter of the target
                 val tipX = targetRect.centerX().coerceIn(arrowWidth / 2f + 4f, canvasWidth - arrowWidth / 2f - 4f)
                 val tipY = (targetRect.bottom - (bounceOffset * 0.4f)).coerceIn(4f, canvasHeight - arrowLength - 4f)
                 arrowPath.moveTo(tipX, tipY)
@@ -321,7 +324,6 @@ class DynamicGraphicsOverlay(
                 arrowPath.lineTo(tipX + (arrowWidth / 2f), tipY + arrowLength)
             }
             ArrowDirection.RIGHT -> {
-                // Pin arrow tip squarely onto the physical left edge of the target
                 val tipX = (targetRect.left + (bounceOffset * 0.4f)).coerceIn(arrowLength + 4f, canvasWidth - 4f)
                 val tipY = targetRect.centerY().coerceIn(arrowWidth / 2f + 4f, canvasHeight - arrowWidth / 2f - 4f)
                 arrowPath.moveTo(tipX, tipY)
@@ -329,7 +331,6 @@ class DynamicGraphicsOverlay(
                 arrowPath.lineTo(tipX - arrowLength, tipY + (arrowWidth / 2f))
             }
             ArrowDirection.LEFT -> {
-                // Pin arrow tip squarely onto the physical right edge of the target
                 val tipX = (targetRect.right - (bounceOffset * 0.4f)).coerceIn(4f, canvasWidth - arrowLength - 4f)
                 val tipY = targetRect.centerY().coerceIn(arrowWidth / 2f + 4f, canvasHeight - arrowWidth / 2f - 4f)
                 arrowPath.moveTo(tipX, tipY)
@@ -340,13 +341,11 @@ class DynamicGraphicsOverlay(
 
         arrowPath.close()
 
-        // Crisp dark outline so arrow remains razor-sharp on any background
         strokePaint.color = Color.BLACK
         strokePaint.strokeWidth = 3.5f * scaleFactor
         strokePaint.alpha = 200
         canvas.drawPath(arrowPath, strokePaint)
 
-        // Arrow Fill
         canvas.drawPath(arrowPath, fillPaint)
     }
 
@@ -359,7 +358,7 @@ class DynamicGraphicsOverlay(
 
         // Top-Right
         canvas.drawLine(r.right, r.top, r.right - len, r.top, paint)
-        canvas.drawLine(r.right, r.top, r.right - len, r.top, paint)
+        canvas.drawLine(r.right, r.top, r.right, r.top + len, paint)
 
         // Bottom-Left
         canvas.drawLine(r.left, r.bottom, r.left + len, r.bottom, paint)
@@ -380,7 +379,6 @@ class DynamicGraphicsOverlay(
         fillPaint.color = Color.BLACK
         fillPaint.alpha = (dimOpacity.coerceIn(0.0f, 1.0f) * 255).toInt()
 
-        // Draw 4 rectangles around the cutout region
         canvas.drawRect(0f, 0f, canvasWidth, cutoutRect.top, fillPaint)
         canvas.drawRect(0f, cutoutRect.bottom, canvasWidth, canvasHeight, fillPaint)
         canvas.drawRect(0f, cutoutRect.top, cutoutRect.left, cutoutRect.bottom, fillPaint)
@@ -419,7 +417,6 @@ class DynamicGraphicsOverlay(
     private fun interpolateKeyframe(keyframes: List<TrackingKeyframe>, currentTimeMs: Long): TrackingKeyframe? {
         if (keyframes.isEmpty()) return null
 
-        // CLAMP: Prevent blinking/vanishing when timeline reaches boundary keyframes
         if (currentTimeMs <= keyframes.first().timeMs) return keyframes.first()
         if (currentTimeMs >= keyframes.last().timeMs) return keyframes.last()
 
