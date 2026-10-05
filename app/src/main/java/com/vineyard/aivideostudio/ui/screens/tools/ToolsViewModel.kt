@@ -1,10 +1,14 @@
 package com.vineyard.aivideostudio.ui.screens.tools
 
 import android.app.Application
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.vineyard.aivideostudio.data.preferences.PreferencesRepository
+import com.vineyard.aivideostudio.data.preferences.GeminiPreferences
 import com.vineyard.aivideostudio.media.audio.AudioExtractor
 import com.vineyard.aivideostudio.media.ocr.FrameOcrData
 import com.vineyard.aivideostudio.media.ocr.NativeBatchOcrEngine
@@ -16,7 +20,6 @@ import com.vineyard.aivideostudio.media.tools.SpatialClusterer
 import com.vineyard.aivideostudio.media.tools.TimeSlotSession
 import com.vineyard.aivideostudio.media.video.ExtractedFrame
 import com.vineyard.aivideostudio.media.video.FastNativeFrameExtractor
-import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -29,13 +32,14 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import javax.inject.Inject
 
 enum class LogType { INFO, SUCCESS, WARNING, ERROR, NET }
 
@@ -85,10 +89,9 @@ data class ToolsUiState(
     val slotStep: Int = 0 // 0: IDLE, 1: START_SET, 2: PLAYING_SLOT, 3: END_SET (Show Modal)
 )
 
-@HiltViewModel
-class ToolsViewModel @Inject constructor(
+class ToolsViewModel(
     application: Application,
-    private val preferencesRepository: PreferencesRepository,
+    private val geminiPreferences: GeminiPreferences,
     private val frameExtractor: FastNativeFrameExtractor,
     private val ocrEngine: NativeBatchOcrEngine,
     private val audioExtractor: AudioExtractor
@@ -192,7 +195,7 @@ class ToolsViewModel @Inject constructor(
 
         playbackJob?.cancel()
         playbackJob = viewModelScope.launch {
-            val fps = 12 // Assumed standard for playback loop mapping
+            val fps = 12
             val delayMs = 1000L / fps
             
             var currentIndex = _uiState.value.currentFrameIndex
@@ -215,10 +218,10 @@ class ToolsViewModel @Inject constructor(
 
         if (state.slotStep == 0) {
             newSlotStart = state.currentFrameIndex
-            newSlotStep = 1 // Marked Start
+            newSlotStep = 1
         } else if (state.slotStep == 2) {
             newSlotEnd = state.currentFrameIndex
-            newSlotStep = 3 // Trigger Modal
+            newSlotStep = 3
         }
 
         _uiState.update { it.copy(
@@ -333,8 +336,7 @@ class ToolsViewModel @Inject constructor(
     }
 
     private fun reevaluateHighlights() {
-        // Triggers the UI canvas to update overlays based on current activeRules and extractedOcrData
-        // (Handled automatically by Compose observing the uiState)
+        // Automatic update through StateFlow observers
     }
 
     // =========================================================
@@ -357,18 +359,18 @@ class ToolsViewModel @Inject constructor(
         addLog("🚀 [PIPELINE START] Native Audio Transcription.", LogType.INFO)
 
         viewModelScope.launch(Dispatchers.IO) {
+            val audioOutputFile = File(getApplication<Application>().cacheDir, "temp_extracted_audio.m4a")
             try {
-                addLog("🎧 Step 1/5: Extracting audio track natively using MediaExtractor...", LogType.INFO)
-                // Use native MediaExtractor to isolate the audio track to PCM
-                val pcmFile = File(getApplication<Application>().cacheDir, "temp_audio.pcm")
-                audioExtractor.extractAudioToPcm(uri, pcmFile.absolutePath)
+                addLog("🎧 Step 1/5: Demuxing audio stream via MediaExtractor & MediaMuxer...", LogType.INFO)
+                extractAudioTrackNative(uri, audioOutputFile)
                 
-                val pcmSizeMb = pcmFile.length() / (1024f * 1024f)
-                addLog("✅ Extraction complete (${String.format(Locale.US, "%.2f", pcmSizeMb)} MB PCM buffer).", LogType.SUCCESS)
+                val audioSizeMb = audioOutputFile.length() / (1024f * 1024f)
+                addLog("✅ Audio extraction complete (${String.format(Locale.US, "%.2f", audioSizeMb)} MB M4A container).", LogType.SUCCESS)
 
-                addLog("🔄 Step 2/5: Converting PCM to Base64 payload...", LogType.INFO)
-                val base64Audio = android.util.Base64.encodeToString(pcmFile.readBytes(), android.util.Base64.NO_WRAP)
-                addLog("✅ Base64 payload created (${base64Audio.length} chars).", LogType.INFO)
+                addLog("🔄 Step 2/5: Converting audio payload to Base64...", LogType.INFO)
+                val audioBytes = audioOutputFile.readBytes()
+                val base64Audio = android.util.Base64.encodeToString(audioBytes, android.util.Base64.NO_WRAP)
+                addLog("✅ Base64 payload created (${base64Audio.length} characters).", LogType.INFO)
 
                 val cleanModel = if (modelName.startsWith("models/")) modelName else "models/$modelName"
                 val endpointUrl = "https://generativelanguage.googleapis.com/v1beta/$cleanModel:generateContent?key=$apiKey"
@@ -378,7 +380,6 @@ class ToolsViewModel @Inject constructor(
                     _uiState.update { it.copy(statusText = "Gemini AI Transcribing...") }
                 }
 
-                // Construct raw JSON payload natively
                 val payloadObj = JSONObject().apply {
                     put("contents", JSONArray().put(JSONObject().apply {
                         put("parts", JSONArray().apply {
@@ -387,7 +388,7 @@ class ToolsViewModel @Inject constructor(
                             })
                             put(JSONObject().apply {
                                 put("inlineData", JSONObject().apply {
-                                    put("mimeType", "audio/wav") // Standardized MIME for PCM/WAV payload
+                                    put("mimeType", "audio/mp4")
                                     put("data", base64Audio)
                                 })
                             })
@@ -404,6 +405,8 @@ class ToolsViewModel @Inject constructor(
                 connection.requestMethod = "POST"
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.doOutput = true
+                connection.connectTimeout = 60000
+                connection.readTimeout = 60000
 
                 connection.outputStream.use { os ->
                     val input = payloadObj.toString().toByteArray(Charsets.UTF_8)
@@ -428,7 +431,6 @@ class ToolsViewModel @Inject constructor(
 
                 addLog("📝 Extracted raw text. Parsing JSON array...", LogType.INFO)
                 
-                // Parse transcripts using NativeTimelineZipManager logic
                 val parsedCues = NativeTimelineZipManager.parseTranscript(rawText)
 
                 if (parsedCues.isEmpty()) {
@@ -445,9 +447,6 @@ class ToolsViewModel @Inject constructor(
                         statusColorHex = "#10b981"
                     )}
                 }
-                
-                // Clean up native temp file
-                pcmFile.delete()
 
                 addLog("========================================", LogType.INFO)
 
@@ -457,8 +456,74 @@ class ToolsViewModel @Inject constructor(
                     addLog("❌ PIPELINE EXCEPTION: ${e.message}", LogType.ERROR)
                     _uiState.update { it.copy(isProcessing = false, statusText = "Transcription Failed", statusColorHex = "#ef4444") }
                 }
+            } finally {
+                if (audioOutputFile.exists()) {
+                    audioOutputFile.delete()
+                }
             }
         }
+    }
+
+    /**
+     * Extracts and demuxes the primary audio track directly to an M4A file without re-encoding.
+     */
+    private fun extractAudioTrackNative(videoUri: Uri, outputFile: File) {
+        val extractor = MediaExtractor()
+        val context = getApplication<Application>()
+        extractor.setDataSource(context, videoUri, null)
+
+        var audioTrackIndex = -1
+        var audioFormat: MediaFormat? = null
+
+        for (i in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+            if (mime.startsWith("audio/")) {
+                audioTrackIndex = i
+                audioFormat = format
+                break
+            }
+        }
+
+        if (audioTrackIndex == -1 || audioFormat == null) {
+            extractor.release()
+            throw IllegalStateException("No valid audio track found in the loaded video file.")
+        }
+
+        extractor.selectTrack(audioTrackIndex)
+
+        val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val muxerTrackIndex = muxer.addTrack(audioFormat)
+        muxer.start()
+
+        val maxBufferSize = audioFormat.optInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 64 * 1024)
+        val buffer = ByteBuffer.allocate(maxBufferSize)
+        val bufferInfo = MediaCodec.BufferInfo()
+
+        try {
+            while (true) {
+                val sampleSize = extractor.readSampleData(buffer, 0)
+                if (sampleSize < 0) break
+
+                bufferInfo.offset = 0
+                bufferInfo.size = sampleSize
+                bufferInfo.presentationTimeUs = extractor.sampleTime
+                bufferInfo.flags = extractor.sampleFlags
+
+                muxer.writeSampleData(muxerTrackIndex, buffer, bufferInfo)
+                extractor.advance()
+            }
+        } finally {
+            try {
+                muxer.stop()
+                muxer.release()
+            } catch (_: Exception) {}
+            extractor.release()
+        }
+    }
+
+    private fun MediaFormat.optInteger(key: String, defaultValue: Int): Int {
+        return if (containsKey(key)) getInteger(key) else defaultValue
     }
 
     override fun onCleared() {
