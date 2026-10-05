@@ -4,9 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -21,21 +23,21 @@ data class ExtractedFrame(
     val timeSeconds: Float,
     val timeFormatted: String,
     val fullResImagePath: String,   // Path to the cached high-resolution image on disk
-    val thumbBitmap: Bitmap,        // Tiny in-memory bitmap for the filmstrip UI
+    val thumbBitmap: Bitmap,        // Lightweight in-memory bitmap for the filmstrip UI
     var isHighlightEnabled: Boolean = false,
     var hasMismatch: Boolean = false
 )
 
 /**
  * High-performance, hardware-accelerated frame extraction engine.
- * Solves mobile memory constraints by buffering high-res frames to local storage
+ * Solves mobile memory constraints by buffering frames to persistent internal storage
  * and retaining only low-res thumbnails in the JVM heap.
  */
 class FastNativeFrameExtractor(private val context: Context) {
 
     /**
      * Extracts frames at the given [targetFps], reporting progress via [onProgress].
-     * Runs entirely on the IO thread to prevent UI blocking.
+     * Runs on Dispatchers.IO to prevent UI blocking.
      */
     suspend fun extractFrames(
         videoUri: Uri,
@@ -46,12 +48,13 @@ class FastNativeFrameExtractor(private val context: Context) {
         val framesList = mutableListOf<ExtractedFrame>()
         val retriever = MediaMetadataRetriever()
 
-        // Create an isolated workspace directory for this session's frames
-        val cacheDir = File(context.cacheDir, "editora_frames_workspace")
-        if (cacheDir.exists()) {
-            cacheDir.deleteRecursively() // Purge old session
+        // Use filesDir rather than cacheDir so Android OS does not purge frames
+        // when switching tabs or when the app sits in recent tasks for a long time.
+        val workspaceDir = File(context.filesDir, "editora_frames_workspace")
+        if (workspaceDir.exists()) {
+            workspaceDir.deleteRecursively() // Purge old session cleanly
         }
-        cacheDir.mkdirs()
+        workspaceDir.mkdirs()
 
         try {
             retriever.setDataSource(context, videoUri)
@@ -64,31 +67,59 @@ class FastNativeFrameExtractor(private val context: Context) {
             val totalFrames = floor(durationSec * targetFps).toInt()
             val intervalUs = (1000000 / targetFps).toLong() // Microseconds
 
+            // Read original video dimensions for hardware-scaled decoding
+            val origWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val origHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+
+            // Cap maximum dimension to 1280px to optimize decode speed and ML Kit OCR performance
+            val maxAllowedDimension = 1280
+            var targetDecodeWidth = origWidth
+            var targetDecodeHeight = origHeight
+
+            if (origWidth > 0 && origHeight > 0) {
+                if (origWidth >= origHeight && origWidth > maxAllowedDimension) {
+                    targetDecodeWidth = maxAllowedDimension
+                    targetDecodeHeight = (origHeight * (maxAllowedDimension.toFloat() / origWidth)).roundToInt()
+                } else if (origHeight > origWidth && origHeight > maxAllowedDimension) {
+                    targetDecodeHeight = maxAllowedDimension
+                    targetDecodeWidth = (origWidth * (maxAllowedDimension.toFloat() / origHeight)).roundToInt()
+                }
+            }
+
+            var lastProgressDispatchTime = 0L
+
             for (i in 0 until totalFrames) {
-                if (!isActive) break // Allow coroutine cancellation
+                if (!isActive) break // Honor coroutine cancellation if triggered
 
                 val targetTimeUs = i * intervalUs
                 val timeSec = targetTimeUs / 1000000f
 
-                // OPTION_CLOSEST guarantees exact frame accuracy rather than nearest sync frame
-                val fullBitmap = retriever.getFrameAtTime(targetTimeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    ?: continue
+                // Use hardware-scaled decoding on API 27+ to avoid full 4K frame memory allocations
+                val frameBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 && targetDecodeWidth > 0 && targetDecodeHeight > 0) {
+                    retriever.getScaledFrameAtTime(
+                        targetTimeUs,
+                        MediaMetadataRetriever.OPTION_CLOSEST,
+                        targetDecodeWidth,
+                        targetDecodeHeight
+                    ) ?: retriever.getFrameAtTime(targetTimeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                } else {
+                    retriever.getFrameAtTime(targetTimeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                } ?: continue
 
-                // 1. Generate a lightweight thumbnail for the UI Filmstrip (e.g., 95px width)
+                // 1. Generate a lightweight thumbnail for the UI Filmstrip (width: 120px)
                 val thumbWidth = 120
-                val aspect = fullBitmap.height.toFloat() / fullBitmap.width.toFloat()
-                val thumbHeight = (thumbWidth * aspect).roundToInt()
-                val thumbBitmap = Bitmap.createScaledBitmap(fullBitmap, thumbWidth, thumbHeight, true)
+                val aspect = frameBitmap.height.toFloat() / frameBitmap.width.toFloat()
+                val thumbHeight = (thumbWidth * aspect).roundToInt().coerceAtLeast(1)
+                val thumbBitmap = Bitmap.createScaledBitmap(frameBitmap, thumbWidth, thumbHeight, true)
 
-                // 2. Save the full-resolution bitmap to disk to prevent RAM overflow
-                val frameFile = File(cacheDir, "frame_$i.webp")
-                FileOutputStream(frameFile).use { outStream ->
-                    // WebP offers fast encoding and low disk footprint with 100% visual fidelity
-                    fullBitmap.compress(Bitmap.CompressFormat.WEBP, 90, outStream)
+                // 2. Save image to disk using JPEG with buffered stream (4x-8x faster than WebP on mobile)
+                val frameFile = File(workspaceDir, "frame_$i.jpg")
+                BufferedOutputStream(FileOutputStream(frameFile), 32768).use { outStream ->
+                    frameBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outStream)
                 }
 
-                // Immediately recycle the full bitmap from RAM
-                fullBitmap.recycle()
+                // Recycle decode bitmap immediately to free native graphics memory
+                frameBitmap.recycle()
 
                 val timeFormatted = String.format(Locale.US, "%.2f", timeSec)
 
@@ -102,9 +133,13 @@ class FastNativeFrameExtractor(private val context: Context) {
                     )
                 )
 
-                // Dispatch progress update to the UI Layer
-                withContext(Dispatchers.Main) {
-                    onProgress(i + 1, totalFrames)
+                // Dispatch progress updates throttled to avoid Compose recomposition jank
+                val now = System.currentTimeMillis()
+                if (now - lastProgressDispatchTime > 80 || i == totalFrames - 1) {
+                    lastProgressDispatchTime = now
+                    withContext(Dispatchers.Main) {
+                        onProgress(i + 1, totalFrames)
+                    }
                 }
             }
 
@@ -123,12 +158,12 @@ class FastNativeFrameExtractor(private val context: Context) {
     }
 
     /**
-     * Cleans up the disk cache. Should be called when a new video is loaded or the app is closed.
+     * Cleans up the disk workspace. Should be called when a new video is loaded or the app is closed.
      */
     fun clearWorkspace() {
-        val cacheDir = File(context.cacheDir, "editora_frames_workspace")
-        if (cacheDir.exists()) {
-            cacheDir.deleteRecursively()
+        val workspaceDir = File(context.filesDir, "editora_frames_workspace")
+        if (workspaceDir.exists()) {
+            workspaceDir.deleteRecursively()
         }
     }
 }
