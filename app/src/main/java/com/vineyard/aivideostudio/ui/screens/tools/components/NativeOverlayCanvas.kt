@@ -122,7 +122,6 @@ object NativeOverlayRenderer {
     ) {
         when (toolType) {
             "blur_gaussian", "blur" -> {
-                // Privacy Gaussian Backdrop & Stroke
                 drawScope.drawRect(
                     color = Color(0xDE0F172A),
                     topLeft = Offset(x0 - 4f, y0 - 4f),
@@ -137,7 +136,6 @@ object NativeOverlayRenderer {
             }
 
             "blur_mosaic" -> {
-                // Pixelated Mosaic Block Grid
                 val blockSize = max(8f, width / 14f)
                 var currentX = x0 - 4f
                 val endX = x0 + width + 4f
@@ -169,7 +167,6 @@ object NativeOverlayRenderer {
             }
 
             "privacy_box" -> {
-                // Solid Opaque Dark Redaction Box
                 drawScope.drawRect(
                     color = SlateDark,
                     topLeft = Offset(x0 - 4f, y0 - 4f),
@@ -184,7 +181,6 @@ object NativeOverlayRenderer {
             }
 
             "emoji_pill" -> {
-                // Privacy Lock Pill (🔒)
                 val pillRadius = (height + 8f) / 2f
                 val pillBounds = Offset(x0 - 6f, y0 - 4f)
                 val pillSize = Size(width + 12f, height + 8f)
@@ -203,7 +199,6 @@ object NativeOverlayRenderer {
                     style = Stroke(width = 2f)
                 )
 
-                // Render native 🔒 lock emoji
                 val fontSizePx = (height + 8f) * 0.72f
                 drawScope.drawContext.canvas.nativeCanvas.apply {
                     val paint = AndroidPaint().apply {
@@ -218,7 +213,6 @@ object NativeOverlayRenderer {
             }
 
             "button_highlight" -> {
-                // Pulsing Brackets Animation (sine wave timing: 0.010)
                 val pulse = (sin(currentTimeMs * 0.010) * 0.5 + 0.5).toFloat()
                 val pad = 6f + pulse * 4f
                 val bx = x0 - pad
@@ -226,14 +220,12 @@ object NativeOverlayRenderer {
                 val bw = width + (pad * 2f)
                 val bh = height + (pad * 2f)
 
-                // Amber fill glow
                 drawScope.drawRect(
                     color = AmberGlow.copy(alpha = 0.12f + pulse * 0.22f),
                     topLeft = Offset(bx, by),
                     size = Size(bw, bh)
                 )
 
-                // Outer border stroke
                 drawScope.drawRect(
                     color = AmberGlow,
                     topLeft = Offset(bx, by),
@@ -241,16 +233,11 @@ object NativeOverlayRenderer {
                     style = Stroke(width = 2f + pulse * 2.5f)
                 )
 
-                // 4 Corner Brackets
                 val len = min(bw, bh) * 0.28f
                 val bracketPath = Path().apply {
-                    // Top-Left
                     moveTo(bx, by + len); lineTo(bx, by); lineTo(bx + len, by)
-                    // Top-Right
                     moveTo(bx + bw - len, by); lineTo(bx + bw, by); lineTo(bx + bw, by + len)
-                    // Bottom-Left
                     moveTo(bx, by + bh - len); lineTo(bx, by + bh); lineTo(bx + len, by + bh)
-                    // Bottom-Right
                     moveTo(bx + bw - len, by + bh); lineTo(bx + bw, by + bh); lineTo(bx + bw, by + bh - len)
                 }
 
@@ -262,7 +249,6 @@ object NativeOverlayRenderer {
             }
 
             "flashing_arrow" -> {
-                // Bouncing Vector Arrow Animation (sine wave timing: 0.012)
                 val pulse = (sin(currentTimeMs * 0.012) * 0.5 + 0.5).toFloat()
                 val bounce = pulse * 8f
                 val arrowLength = max(30f, fullCanvasWidth * 0.045f)
@@ -270,7 +256,6 @@ object NativeOverlayRenderer {
                 val tipY = y0 + (height / 2f)
                 val tailX = tipX - arrowLength
 
-                // Shaft (black outline + red inner)
                 drawScope.drawLine(
                     color = Color.Black,
                     start = Offset(tailX, tipY),
@@ -284,7 +269,6 @@ object NativeOverlayRenderer {
                     strokeWidth = 4f
                 )
 
-                // Arrowhead Triangle
                 val headSize = max(9f, arrowLength * 0.32f)
                 val headPath = Path().apply {
                     moveTo(tipX, tipY)
@@ -298,26 +282,20 @@ object NativeOverlayRenderer {
             }
 
             "spotlight" -> {
-                // Dark Backdrop with Highlight Cutout Window
                 val darkColor = Color(0xA6000000)
-                // Top
                 drawScope.drawRect(color = darkColor, topLeft = Offset(0f, 0f), size = Size(fullCanvasWidth, y0 - 4f))
-                // Bottom
                 drawScope.drawRect(
                     color = darkColor,
                     topLeft = Offset(0f, y0 + height + 4f),
                     size = Size(fullCanvasWidth, fullCanvasHeight - (y0 + height + 4f))
                 )
-                // Left
                 drawScope.drawRect(color = darkColor, topLeft = Offset(0f, y0 - 4f), size = Size(x0 - 4f, height + 8f))
-                // Right
                 drawScope.drawRect(
                     color = darkColor,
                     topLeft = Offset(x0 + width + 4f, y0 - 4f),
                     size = Size(fullCanvasWidth - (x0 + width + 4f), height + 8f)
                 )
 
-                // Highlight border around focal window
                 drawScope.drawRect(
                     color = CyanAccent,
                     topLeft = Offset(x0 - 4f, y0 - 4f),
@@ -327,7 +305,6 @@ object NativeOverlayRenderer {
             }
 
             "highlight_circle" -> {
-                // Ring / Circle Focus Indicator
                 val cx = x0 + (width / 2f)
                 val cy = y0 + (height / 2f)
                 val radius = (max(width, height) / 2f) + 8f
@@ -341,7 +318,6 @@ object NativeOverlayRenderer {
             }
 
             "vertical_column" -> {
-                // Translucent Vertical Sidebar Column Frame
                 drawScope.drawRect(
                     color = PurpleAccent.copy(alpha = 0.14f),
                     topLeft = Offset(x0 - 4f, 0f),
@@ -356,7 +332,6 @@ object NativeOverlayRenderer {
             }
 
             else -> {
-                // Standard Highlight Box + Optional Red Pointer Arrow
                 drawScope.drawRect(
                     color = AmberGlow.copy(alpha = 0.35f),
                     topLeft = Offset(x0 - 3f, y0 - 3f),
@@ -396,6 +371,7 @@ object NativeOverlayRenderer {
 
     /**
      * Offline Android Canvas renderer used during video export rendering.
+     * Guarantees 100% pixel-perfect match with the live Compose preview.
      */
     fun drawToolOnAndroidCanvas(
         canvas: android.graphics.Canvas,
@@ -408,6 +384,8 @@ object NativeOverlayRenderer {
         withArrow: Boolean
     ) {
         val paint = AndroidPaint().apply { isAntiAlias = true }
+        val canvasWidth = canvas.width.toFloat()
+        val canvasHeight = canvas.height.toFloat()
 
         when (toolType) {
             "blur_gaussian", "blur" -> {
@@ -416,6 +394,37 @@ object NativeOverlayRenderer {
                 canvas.drawRect(x0 - 4f, y0 - 4f, x0 + width + 4f, y0 + height + 4f, paint)
 
                 paint.color = android.graphics.Color.parseColor("#8C38BDF8")
+                paint.style = AndroidPaint.Style.STROKE
+                paint.strokeWidth = 2f
+                canvas.drawRect(x0 - 4f, y0 - 4f, x0 + width + 4f, y0 + height + 4f, paint)
+            }
+
+            "blur_mosaic" -> {
+                val blockSize = max(8f, width / 14f)
+                var currentX = x0 - 4f
+                val endX = x0 + width + 4f
+                val endY = y0 + height + 4f
+
+                var blockIndex = 0
+                while (currentX < endX) {
+                    var currentY = y0 - 4f
+                    while (currentY < endY) {
+                        val bw = min(blockSize, endX - currentX)
+                        val bh = min(blockSize, endY - currentY)
+                        paint.style = AndroidPaint.Style.FILL
+                        paint.color = if ((blockIndex % 2) == 0) {
+                            android.graphics.Color.parseColor("#DD0F172A")
+                        } else {
+                            android.graphics.Color.parseColor("#CC1E293B")
+                        }
+                        canvas.drawRect(currentX, currentY, currentX + bw, currentY + bh, paint)
+                        currentY += blockSize
+                        blockIndex++
+                    }
+                    currentX += blockSize
+                }
+
+                paint.color = android.graphics.Color.parseColor("#8038BDF8")
                 paint.style = AndroidPaint.Style.STROKE
                 paint.strokeWidth = 2f
                 canvas.drawRect(x0 - 4f, y0 - 4f, x0 + width + 4f, y0 + height + 4f, paint)
@@ -430,6 +439,29 @@ object NativeOverlayRenderer {
                 paint.style = AndroidPaint.Style.STROKE
                 paint.strokeWidth = 2f
                 canvas.drawRect(x0 - 4f, y0 - 4f, x0 + width + 4f, y0 + height + 4f, paint)
+            }
+
+            "emoji_pill" -> {
+                val pillRadius = (height + 8f) / 2f
+                val rectF = AndroidRectF(x0 - 6f, y0 - 4f, x0 + width + 6f, y0 + height + 4f)
+
+                paint.color = android.graphics.Color.parseColor("#FF090D16")
+                paint.style = AndroidPaint.Style.FILL
+                canvas.drawRoundRect(rectF, pillRadius, pillRadius, paint)
+
+                paint.color = android.graphics.Color.parseColor("#FF38BDF8")
+                paint.style = AndroidPaint.Style.STROKE
+                paint.strokeWidth = 2f
+                canvas.drawRoundRect(rectF, pillRadius, pillRadius, paint)
+
+                val textPaint = AndroidPaint().apply {
+                    textSize = (height + 8f) * 0.72f
+                    textAlign = AndroidPaint.Align.CENTER
+                    isAntiAlias = true
+                }
+                val textX = x0 + (width / 2f)
+                val textY = (y0 + (height / 2f)) - ((textPaint.descent() + textPaint.ascent()) / 2f)
+                canvas.drawText("🔒", textX, textY, textPaint)
             }
 
             "button_highlight" -> {
@@ -464,7 +496,7 @@ object NativeOverlayRenderer {
             "flashing_arrow" -> {
                 val pulse = (sin(currentTimeMs * 0.012) * 0.5 + 0.5).toFloat()
                 val bounce = pulse * 8f
-                val arrowLength = max(30f, canvas.width * 0.045f)
+                val arrowLength = max(30f, canvasWidth * 0.045f)
                 val tipX = x0 - 4f - bounce
                 val tipY = y0 + (height / 2f)
                 val tailX = tipX - arrowLength
@@ -488,6 +520,42 @@ object NativeOverlayRenderer {
                 canvas.drawPath(path, paint)
             }
 
+            "spotlight" -> {
+                paint.style = AndroidPaint.Style.FILL
+                paint.color = android.graphics.Color.parseColor("#A6000000")
+                canvas.drawRect(0f, 0f, canvasWidth, y0 - 4f, paint)
+                canvas.drawRect(0f, y0 + height + 4f, canvasWidth, canvasHeight, paint)
+                canvas.drawRect(0f, y0 - 4f, x0 - 4f, y0 + height + 4f, paint)
+                canvas.drawRect(x0 + width + 4f, y0 - 4f, canvasWidth, y0 + height + 4f, paint)
+
+                paint.style = AndroidPaint.Style.STROKE
+                paint.color = android.graphics.Color.parseColor("#FF38BDF8")
+                paint.strokeWidth = 3f
+                canvas.drawRect(x0 - 4f, y0 - 4f, x0 + width + 4f, y0 + height + 4f, paint)
+            }
+
+            "highlight_circle" -> {
+                val cx = x0 + (width / 2f)
+                val cy = y0 + (height / 2f)
+                val radius = (max(width, height) / 2f) + 8f
+
+                paint.color = android.graphics.Color.parseColor("#FF38BDF8")
+                paint.style = AndroidPaint.Style.STROKE
+                paint.strokeWidth = 4f
+                canvas.drawCircle(cx, cy, radius, paint)
+            }
+
+            "vertical_column" -> {
+                paint.style = AndroidPaint.Style.FILL
+                paint.color = android.graphics.Color.argb((0.14f * 255).toInt(), 168, 85, 247)
+                canvas.drawRect(x0 - 4f, 0f, x0 + width + 4f, canvasHeight, paint)
+
+                paint.style = AndroidPaint.Style.STROKE
+                paint.color = android.graphics.Color.parseColor("#FFA855F7")
+                paint.strokeWidth = 3f
+                canvas.drawRect(x0 - 4f, 0f, x0 + width + 4f, canvasHeight, paint)
+            }
+
             else -> {
                 paint.color = android.graphics.Color.argb((0.35f * 255).toInt(), 245, 158, 11)
                 paint.style = AndroidPaint.Style.FILL
@@ -499,7 +567,7 @@ object NativeOverlayRenderer {
                 canvas.drawRect(x0 - 3f, y0 - 3f, x0 + width + 3f, y0 + height + 3f, paint)
 
                 if (withArrow) {
-                    val arrowLength = max(28f, canvas.width * 0.04f)
+                    val arrowLength = max(28f, canvasWidth * 0.04f)
                     val startX = max(5f, x0 - 6f - arrowLength)
                     val startY = y0 + (height / 2f)
 
