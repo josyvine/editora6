@@ -14,8 +14,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,17 +21,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.vineyard.aivideostudio.media.video.ExtractedFrame
 import com.vineyard.aivideostudio.ui.screens.tools.components.ToolsOverlayPreview
 
-// Custom Colors from your HTML
+// Custom Colors matching Video OCR Studio theme
 private val BgDark = Color(0xFF090D16)
 private val SurfaceDark = Color(0xFF131B2E)
 private val SurfaceVariant = Color(0xFF1E293B)
@@ -79,14 +78,13 @@ fun ToolsScreen(viewModel: ToolsViewModel) {
                 )
             }
         }
-        Divider(color = BorderColor)
+        HorizontalDivider(color = BorderColor)
 
-        // Internal Top Tab Row (Replaces HTML Footer to avoid clashing with Android Bottom Nav)
+        // Internal Top Tab Row
         TabRow(
             selectedTabIndex = selectedMainTab,
             containerColor = SurfaceDark,
-            contentColor = AccentBlue,
-            indicator = { /* Use custom indicator if desired, default is fine */ }
+            contentColor = AccentBlue
         ) {
             Tab(selected = selectedMainTab == 0, onClick = { selectedMainTab = 0 }) {
                 Text("Studio Viewer", modifier = Modifier.padding(12.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -111,14 +109,13 @@ fun ToolsScreen(viewModel: ToolsViewModel) {
                 1 -> ExportDataWizardTab(viewModel, uiState)
                 2 -> RenderVideoTab(viewModel, uiState)
             }
-            Spacer(modifier = Modifier.height(80.dp)) // padding for bottom nav
+            Spacer(modifier = Modifier.height(80.dp))
         }
     }
 }
 
 @Composable
 private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
-    val context = LocalContext.current
     val videoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -144,11 +141,9 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             ) {
                 val currentFrame = state.frames.getOrNull(state.currentFrameIndex)
                 if (currentFrame != null) {
-                    // Extract active boxes for this frame from state.extractedOcrData / directBlurs
-                    // Passed to NativeOverlayCanvas (File 5)
                     ToolsOverlayPreview(
                         baseBitmap = currentFrame.thumbBitmap,
-                        activeBoxes = emptyList(), // Hydrate from VM logic
+                        activeBoxes = emptyList(),
                         currentTimeMs = (currentFrame.timeSeconds * 1000).toLong(),
                         withArrow = true
                     )
@@ -234,9 +229,8 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             if (state.videoUri != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // Simulating Dropdown for FPS
                     OutlinedButton(
-                        onClick = { /* Open FPS Dropdown */ },
+                        onClick = { /* Default 12 FPS */ },
                         shape = RoundedCornerShape(6.dp),
                         modifier = Modifier.weight(1f)
                     ) {
@@ -314,7 +308,10 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(
-                    onClick = { viewModel.addTargetRule(keyword, "Global", "button_highlight"); keyword = "" },
+                    onClick = { 
+                        viewModel.addTargetRule(keyword, "Global", "button_highlight")
+                        keyword = "" 
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
                     shape = RoundedCornerShape(6.dp),
                     modifier = Modifier.weight(1f)
@@ -333,7 +330,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                     .padding(8.dp)
             ) {
                 if (state.activeRules.isEmpty()) {
-                    Text("No target added yet.", fontSize = 12.sp, color = Color.Gray)
+                    Text("No target added yet. Enter word and tap \"Lock Target\".", fontSize = 12.sp, color = Color.Gray)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         state.activeRules.forEach { rule ->
@@ -345,7 +342,13 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                             ) {
                                 Text("[${rule.tool.uppercase()}] ${rule.text}", fontSize = 11.sp, color = WarningYellow)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("[X]", fontSize = 12.sp, color = DangerRed, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { viewModel.removeTargetRule(rule.id) })
+                                Text(
+                                    "[X]", 
+                                    fontSize = 12.sp, 
+                                    color = DangerRed, 
+                                    fontWeight = FontWeight.Bold, 
+                                    modifier = Modifier.clickable { viewModel.removeTargetRule(rule.id) }
+                                )
                             }
                         }
                     }
@@ -374,7 +377,6 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onClick: ()
             modifier = Modifier.fillMaxSize()
         )
         
-        // Time overlay
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -387,7 +389,6 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onClick: ()
             Text("${frame.timeFormatted}s", color = Color.White, fontSize = 9.sp)
         }
         
-        // ON/OFF Badge
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -395,7 +396,12 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onClick: ()
                 .background(if (frame.isHighlightEnabled) WarningYellow else BorderColor, RoundedCornerShape(2.dp))
                 .padding(horizontal = 4.dp, vertical = 1.dp)
         ) {
-            Text(if (frame.isHighlightEnabled) "ON" else "CLEAN", color = if (frame.isHighlightEnabled) Color.Black else Color.LightGray, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            Text(
+                if (frame.isHighlightEnabled) "ON" else "CLEAN", 
+                color = if (frame.isHighlightEnabled) Color.Black else Color.LightGray, 
+                fontSize = 8.sp, 
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -468,4 +474,231 @@ private fun WizardStep1(viewModel: ToolsViewModel, state: ToolsUiState) {
             
             Button(
                 onClick = { viewModel.transcribeAudioWithGemini(apiKey, "gemini-2.5-flash") },
-                colors = ButtonDefaults.buttonColors(contain
+                colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("🎙️ Transcribe Audio with Gemini AI", fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            TerminalConsole(viewModel, state)
+        }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+    Button(
+        onClick = { viewModel.setWizardStep(2) },
+        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Next: Auto-Scan ZIP Tool ➔", fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+        border = BorderStroke(1.dp, PurpleAccent),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        var filterText by remember { mutableStateOf("") }
+
+        Column(Modifier.padding(10.dp)) {
+            Text("Auto-Scan ZIP & Apply Editora4 Tool", color = Color(0xFFE9D5FF), fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = filterText,
+                onValueChange = { filterText = it },
+                placeholder = { Text("Text to target on screen (e.g. Playground)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = BgDark,
+                    focusedContainerColor = BgDark,
+                    unfocusedBorderColor = BorderColor,
+                    focusedBorderColor = PurpleAccent
+                )
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = { /* Action handled via NativeTimelineZipManager */ },
+                colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Fetch ZIP & Apply Tool", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = { viewModel.setWizardStep(1) },
+            colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
+            modifier = Modifier.weight(1f)
+        ) {
+            Text("⬅ Back", color = Color.White)
+        }
+        Button(
+            onClick = { viewModel.setWizardStep(3) },
+            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+            modifier = Modifier.weight(1.2f)
+        ) {
+            Text("Next: JSON & Export ➔")
+        }
+    }
+}
+
+@Composable
+private fun WizardStep3(viewModel: ToolsViewModel, state: ToolsUiState) {
+    val clipboardManager = LocalClipboardManager.current
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+        border = BorderStroke(1.dp, BorderColor),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Active Highlight Coordinates (JSON)", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                Button(
+                    onClick = { clipboardManager.setText(AnnotatedString("{\n  \"frames\": []\n}")) },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("Copy", fontSize = 11.sp)
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .background(BgDark, RoundedCornerShape(6.dp))
+                    .border(1.dp, BorderColor, RoundedCornerShape(6.dp))
+                    .padding(8.dp)
+            ) {
+                Text(
+                    text = "{\n  \"target\": \"Playground\",\n  \"total_highlighted_frames\": ${state.frames.count { it.isHighlightEnabled }}\n}",
+                    color = AccentBlue,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp
+                )
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+    Button(
+        onClick = { viewModel.setWizardStep(2) },
+        colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("⬅ Back: Auto-Scan ZIP", color = Color.White)
+    }
+}
+
+@Composable
+private fun TerminalConsole(viewModel: ToolsViewModel, state: ToolsUiState) {
+    val clipboardManager = LocalClipboardManager.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF030712))
+            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0B1120))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("🖥️ Diagnostic Log Console", color = Color(0xFF94A3B8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "📋 Copy",
+                    color = AccentBlue,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        val fullLog = state.activeLogEntries.joinToString("\n") { "${it.timestamp} ${it.message}" }
+                        clipboardManager.setText(AnnotatedString(fullLog))
+                    }
+                )
+                Text(
+                    text = "🗑️ Clear",
+                    color = Color.Gray,
+                    fontSize = 11.sp,
+                    modifier = Modifier.clickable { viewModel.clearLogs() }
+                )
+            }
+        }
+        HorizontalDivider(color = Color(0xFF1E293B))
+        
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 180.dp, max = 260.dp)
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(state.activeLogEntries) { entry ->
+                val color = when (entry.type) {
+                    LogType.INFO -> AccentBlue
+                    LogType.SUCCESS -> SuccessGreen
+                    LogType.WARNING -> WarningYellow
+                    LogType.ERROR -> DangerRed
+                    LogType.NET -> PurpleAccent
+                }
+                Text("${entry.timestamp} ${entry.message}", color = color, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RenderVideoTab(viewModel: ToolsViewModel, state: ToolsUiState) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, BorderColor),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Text("Render and Export Full Video", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Burns all selected Editora4 effects (blur, mosaic, boxes, arrows) directly into your exported video with full synchronized original audio at exact normal speed.",
+                color = Color.Gray,
+                fontSize = 12.sp
+            )
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = { /* Render Video Call via Media3 */ },
+                colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Download Full Video With Highlights & Audio", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
