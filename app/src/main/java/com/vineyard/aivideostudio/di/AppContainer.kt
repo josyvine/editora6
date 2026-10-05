@@ -19,7 +19,9 @@ import com.vineyard.aivideostudio.data.storage.StorageManager
 import com.vineyard.aivideostudio.domain.pipeline.VideoProcessingPipeline
 import com.vineyard.aivideostudio.media.audio.AudioExtractor
 import com.vineyard.aivideostudio.media.audio.PcmToM4aConverter
+import com.vineyard.aivideostudio.media.ocr.NativeBatchOcrEngine
 import com.vineyard.aivideostudio.media.transformer.Media3TransformerEngine
+import com.vineyard.aivideostudio.media.video.FastNativeFrameExtractor
 import com.vineyard.aivideostudio.media.video.ObjectAnchorCalibrator
 import com.vineyard.aivideostudio.media.video.VideoMetadataReader
 import com.vineyard.aivideostudio.processing.controller.ProcessingController
@@ -78,6 +80,10 @@ class AppContainer(private val context: Context) {
     val transformerEngine = Media3TransformerEngine(context)
     val audioExtractor = AudioExtractor(context)
     val ttsEngine = GeminiTtsEngine(context, geminiApiService, geminiPreferences, modelRepository)
+
+    // Tools Workstation Native Engines (NEW)
+    val fastNativeFrameExtractor = FastNativeFrameExtractor(context)
+    val nativeBatchOcrEngine = NativeBatchOcrEngine()
 
     // On-Device Script-Mode Object & Face Calibrator
     val objectAnchorCalibrator = ObjectAnchorCalibrator(context, logger)
