@@ -24,6 +24,7 @@ import com.vineyard.aivideostudio.media.video.ExtractedFrame
 import com.vineyard.aivideostudio.media.video.FastNativeFrameExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,7 +36,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
@@ -44,7 +44,6 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
-import kotlin.math.hypot
 
 enum class LogType { INFO, SUCCESS, WARNING, ERROR, NET }
 
@@ -152,6 +151,7 @@ class ToolsViewModel(
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
     private var playbackJob: Job? = null
+    private var extractionJob: Job? = null
 
     init {
         val savedKey = geminiPreferences.getApiKey()
@@ -160,7 +160,7 @@ class ToolsViewModel(
     }
 
     // =========================================================
-    // TERMINAL LOGGING (A-to-Z Diagnostics)
+    // TERMINAL LOGGING
     // =========================================================
     fun addLog(message: String, type: LogType = LogType.INFO) {
         val timestamp = timeFormatter.format(Date())
@@ -181,6 +181,7 @@ class ToolsViewModel(
     // VIDEO LOAD & FRAME EXTRACTION
     // =========================================================
     fun setVideoUri(uri: Uri) {
+        // Clear workspace ONLY when a new video is explicitly selected
         frameExtractor.clearWorkspace()
         _uiState.update { 
             ToolsUiState(
@@ -203,26 +204,32 @@ class ToolsViewModel(
         ) }
         addLog("🎞️ Starting hardware-accelerated frame extraction at $targetFps FPS...", LogType.INFO)
 
-        viewModelScope.launch {
+        extractionJob?.cancel()
+        extractionJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 val extractedList = frameExtractor.extractFrames(uri, targetFps) { current, total ->
+                    val pct = ((current.toFloat() / total.toFloat()) * 100).toInt()
                     _uiState.update { it.copy(
                         statusText = "Extracting $current/$total",
-                        progressPercent = ((current.toFloat() / total.toFloat()) * 100).toInt()
+                        progressPercent = pct
                     )}
                 }
 
-                _uiState.update { it.copy(
-                    frames = extractedList,
-                    isProcessing = false,
-                    statusText = "${extractedList.size} Frames Ready",
-                    statusColorHex = "#10b981",
-                    progressPercent = 0
-                )}
-                addLog("✅ Successfully extracted ${extractedList.size} frames to disk cache.", LogType.SUCCESS)
+                withContext(Dispatchers.Main) {
+                    _uiState.update { it.copy(
+                        frames = extractedList,
+                        isProcessing = false,
+                        statusText = "${extractedList.size} Frames Ready",
+                        statusColorHex = "#10b981",
+                        progressPercent = 0
+                    )}
+                    addLog("✅ Successfully extracted ${extractedList.size} frames to persistent cache.", LogType.SUCCESS)
+                }
             } catch (e: Exception) {
-                addLog("❌ Extraction Error: ${e.message}", LogType.ERROR)
-                _uiState.update { it.copy(isProcessing = false, statusText = "Extraction Failed", statusColorHex = "#ef4444") }
+                withContext(Dispatchers.Main) {
+                    addLog("❌ Extraction Error: ${e.message}", LogType.ERROR)
+                    _uiState.update { it.copy(isProcessing = false, statusText = "Extraction Failed", statusColorHex = "#ef4444") }
+                }
             }
         }
     }
@@ -246,13 +253,17 @@ class ToolsViewModel(
         playbackJob?.cancel()
         playbackJob = viewModelScope.launch {
             val fps = _uiState.value.targetFps
-            val delayMs = 1000L / fps
+            val frameIntervalMs = (1000L / fps).coerceAtLeast(10L)
             
             var currentIndex = _uiState.value.currentFrameIndex
             while (currentIndex < _uiState.value.frames.size - 1) {
-                delay(delayMs)
+                val startTime = System.currentTimeMillis()
                 currentIndex++
                 _uiState.update { it.copy(currentFrameIndex = currentIndex) }
+                
+                val elapsed = System.currentTimeMillis() - startTime
+                val sleepTime = (frameIntervalMs - elapsed).coerceAtLeast(5L)
+                delay(sleepTime)
             }
             pausePlayback()
         }
@@ -323,17 +334,19 @@ class ToolsViewModel(
         
         _uiState.update { it.copy(statusText = "Scanning Frame...", statusColorHex = "#eab308") }
         
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             val ocrResult = ocrEngine.scanFrame(frame)
-            val updatedMap = state.extractedOcrData.toMutableMap()
+            val updatedMap = _uiState.value.extractedOcrData.toMutableMap()
             updatedMap[frame.index] = ocrResult
             
-            _uiState.update { it.copy(
-                extractedOcrData = updatedMap,
-                statusText = "Frame #${frame.index} Ready",
-                statusColorHex = "#10b981"
-            )}
-            updateExportedJsonState()
+            withContext(Dispatchers.Main) {
+                _uiState.update { it.copy(
+                    extractedOcrData = updatedMap,
+                    statusText = "Frame #${frame.index} Ready",
+                    statusColorHex = "#10b981"
+                )}
+                updateExportedJsonState()
+            }
         }
     }
 
@@ -350,26 +363,35 @@ class ToolsViewModel(
         _uiState.update { it.copy(isProcessing = true, statusText = "Ultra-Fast OCR...", statusColorHex = "#eab308", slotStep = 0) }
         addLog("🚀 Initiating parallel native OCR scan on ${framesToScan.size} frames...", LogType.INFO)
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             try {
-                val batchResults = ocrEngine.scanBatch(framesToScan, parallelWorkers = 5) { current, total ->
-                    _uiState.update { it.copy(statusText = "OCR: $current/$total") }
+                val batchResults = ocrEngine.scanBatch(framesToScan, parallelWorkers = 3) { current, total ->
+                    val pct = ((current.toFloat() / total.toFloat()) * 100).toInt()
+                    _uiState.update { it.copy(
+                        statusText = "OCR: $current/$total",
+                        progressPercent = pct
+                    )}
                 }
 
-                val updatedMap = state.extractedOcrData.toMutableMap()
+                val updatedMap = _uiState.value.extractedOcrData.toMutableMap()
                 updatedMap.putAll(batchResults)
 
-                _uiState.update { it.copy(
-                    extractedOcrData = updatedMap,
-                    isProcessing = false,
-                    statusText = "Scanned ${framesToScan.size} Frames",
-                    statusColorHex = "#10b981"
-                )}
-                addLog("✅ Ultra-Fast OCR completed successfully.", LogType.SUCCESS)
-                updateExportedJsonState()
+                withContext(Dispatchers.Main) {
+                    _uiState.update { it.copy(
+                        extractedOcrData = updatedMap,
+                        isProcessing = false,
+                        progressPercent = 0,
+                        statusText = "Scanned ${framesToScan.size} Frames",
+                        statusColorHex = "#10b981"
+                    )}
+                    addLog("✅ Ultra-Fast OCR completed successfully.", LogType.SUCCESS)
+                    updateExportedJsonState()
+                }
             } catch (e: Exception) {
-                addLog("❌ OCR Batch Error: ${e.message}", LogType.ERROR)
-                _uiState.update { it.copy(isProcessing = false, statusText = "OCR Failed", statusColorHex = "#ef4444") }
+                withContext(Dispatchers.Main) {
+                    addLog("❌ OCR Batch Error: ${e.message}", LogType.ERROR)
+                    _uiState.update { it.copy(isProcessing = false, statusText = "OCR Failed", statusColorHex = "#ef4444") }
+                }
             }
         }
     }
@@ -1143,7 +1165,8 @@ class ToolsViewModel(
     override fun onCleared() {
         super.onCleared()
         playbackJob?.cancel()
-        frameExtractor.clearWorkspace()
+        // Do NOT wipe frames workspace here so that tab navigation or task switching
+        // leaves extracted video frames and OCR results intact.
         ocrEngine.close()
     }
 }
