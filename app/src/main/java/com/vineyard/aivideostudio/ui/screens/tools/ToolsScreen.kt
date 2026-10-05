@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -21,9 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -33,8 +35,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import coil.compose.AsyncImage
 import com.vineyard.aivideostudio.media.tools.DetectedTargetBox
+import com.vineyard.aivideostudio.media.tools.SpatialClusterer
 import com.vineyard.aivideostudio.media.video.ExtractedFrame
 import com.vineyard.aivideostudio.ui.screens.tools.components.ToolsOverlayPreview
 
@@ -176,27 +178,32 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             ) {
                 val currentFrame = state.frames.getOrNull(state.currentFrameIndex)
                 if (currentFrame != null) {
-                    val activeBoxes = mutableListOf<DetectedTargetBox>()
-                    
-                    // Add direct blurs
-                    activeBoxes.addAll(state.directBlurs[currentFrame.index] ?: emptyList())
+                    val activeBoxes = remember(
+                        currentFrame.index,
+                        state.directBlurs,
+                        state.extractedOcrData[currentFrame.index],
+                        state.activeRules
+                    ) {
+                        val boxes = mutableListOf<DetectedTargetBox>()
+                        boxes.addAll(state.directBlurs[currentFrame.index] ?: emptyList())
 
-                    // Add active manual rules matches
-                    state.extractedOcrData[currentFrame.index]?.let { ocr ->
-                        for (rule in state.activeRules) {
-                            if (!rule.isZipSource) {
-                                val boxes = com.vineyard.aivideostudio.media.tools.SpatialClusterer.findMatchingBoundingBoxes(ocr.lines, rule.text)
-                                for (b in boxes) {
-                                    activeBoxes.add(
-                                        DetectedTargetBox(
-                                            x0 = b.x0, y0 = b.y0, width = b.width, height = b.height,
-                                            text = rule.text, tool = rule.tool, frame = currentFrame.index,
-                                            time = currentFrame.timeSeconds
+                        state.extractedOcrData[currentFrame.index]?.let { ocr ->
+                            for (rule in state.activeRules) {
+                                if (!rule.isZipSource) {
+                                    val matched = SpatialClusterer.findMatchingBoundingBoxes(ocr.lines, rule.text)
+                                    for (b in matched) {
+                                        boxes.add(
+                                            DetectedTargetBox(
+                                                x0 = b.x0, y0 = b.y0, width = b.width, height = b.height,
+                                                text = rule.text, tool = rule.tool, frame = currentFrame.index,
+                                                time = currentFrame.timeSeconds
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                             }
                         }
+                        boxes
                     }
 
                     ToolsOverlayPreview(
@@ -358,11 +365,25 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                         Text("Extract All", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
+
+                // In-Card Progress Bar during Frame Extraction
+                if (state.isProcessing && state.progressPercent > 0) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { state.progressPercent / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = AccentBlue,
+                        trackColor = SurfaceVariant
+                    )
+                }
             }
         }
     }
 
-    // 3. TIMELINE FILMSTRIP
+    // 3. TIMELINE FILMSTRIP (HIGH-PERFORMANCE KEYED LIST WITH HARDWARE BITMAPS)
     if (state.frames.isNotEmpty()) {
         Card(
             colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -381,9 +402,26 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                     Text("Tap toggle to unmark box", fontSize = 11.sp, color = AccentBlue)
                 }
                 Spacer(modifier = Modifier.height(6.dp))
+
+                val lazyListState = rememberLazyListState()
+
+                // Auto-center filmstrip on active frame during playback and stepping
+                LaunchedEffect(state.currentFrameIndex) {
+                    if (state.frames.isNotEmpty()) {
+                        val targetIndex = (state.currentFrameIndex - 2).coerceAtLeast(0)
+                        lazyListState.scrollToItem(targetIndex)
+                    }
+                }
                 
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(state.frames) { frame ->
+                LazyRow(
+                    state = lazyListState,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(
+                        items = state.frames,
+                        key = { it.index },
+                        contentType = { "frame_thumb" }
+                    ) { frame ->
                         FrameThumbnail(
                             frame = frame,
                             isActive = frame.index == state.currentFrameIndex,
@@ -396,7 +434,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
         }
     }
 
-    // 4. TARGET PANEL & RULES CARD (ALL CONTROLS RESTORED)
+    // 4. TARGET PANEL & RULES CARD
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
         shape = RoundedCornerShape(10.dp),
@@ -593,8 +631,9 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onToggle: (
             .border(if (isActive) 2.dp else 1.dp, borderColor, RoundedCornerShape(6.dp))
             .clickable { onClick() }
     ) {
-        AsyncImage(
-            model = frame.thumbBitmap,
+        // Direct zero-latency hardware bitmap rendering (no Coil cache lookup overhead)
+        Image(
+            bitmap = frame.thumbBitmap.asImageBitmap(),
             contentDescription = "Frame ${frame.index}",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
