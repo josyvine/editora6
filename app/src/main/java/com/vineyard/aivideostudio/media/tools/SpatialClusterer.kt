@@ -67,7 +67,7 @@ data class TimeSlotSession(
 
 /**
  * High-performance native spatial clustering & timeline windowing engine.
- * Replaces browser JavaScript clustering with multithreaded native CPU math.
+ * Matches exact Euclidean threshold math and hierarchical filtering from the HTML studio.
  */
 object SpatialClusterer {
 
@@ -96,11 +96,18 @@ object SpatialClusterer {
     ): List<SpatialCluster> {
         if (boxes.isEmpty()) return emptyList()
 
-        val clusters = mutableListOf<SpatialCluster>()
+        // Adapt coordinate envelope to the actual coordinate space of detected boxes
+        val maxBoxX = boxes.maxOfOrNull { it.x0 + it.width } ?: 1080f
+        val maxBoxY = boxes.maxOfOrNull { it.y0 + it.height } ?: 2400f
+        val effectiveWidth = max(videoWidth.toFloat(), maxBoxX).coerceAtLeast(100f)
+        val effectiveHeight = max(videoHeight.toFloat(), maxBoxY).coerceAtLeast(100f)
+
         val dynamicThreshold = max(
             50f,
-            min(videoWidth.toFloat(), videoHeight.toFloat()) * 0.085f
+            min(effectiveWidth, effectiveHeight) * 0.085f
         )
+
+        val clusters = mutableListOf<SpatialCluster>()
 
         for (box in boxes) {
             val bx = box.centerX
@@ -136,8 +143,8 @@ object SpatialClusterer {
 
         // Region categorization and formatted naming
         for ((index, cluster) in clusters.withIndex()) {
-            val rx = if (videoWidth > 0) cluster.centerX / videoWidth.toFloat() else 0.5f
-            val ry = if (videoHeight > 0) cluster.centerY / videoHeight.toFloat() else 0.5f
+            val rx = cluster.centerX / effectiveWidth
+            val ry = cluster.centerY / effectiveHeight
 
             val regionLabel = when {
                 ry <= 0.18f -> "Top Header Bar"
@@ -215,7 +222,7 @@ object SpatialClusterer {
                 duration = duration,
                 frameCount = sessionFrames.size,
                 frameSet = sessionFrames.toSet(),
-                displayName = "⏱️ Slot ${index + 1}: ${startTimeFormatted}s ➔ ${endTimeFormatted}s (${durationFormatted}s • ${sessionFrames.size} frames)"
+                displayName = "⏱️ Slot ${index + 1}: ${startTimeFormatted}s ➔ ${endTimeFormatted}s (${durationFormatted}s duration • ${sessionFrames.size} frames)"
             )
         }
     }
@@ -229,15 +236,20 @@ object SpatialClusterer {
     ): List<ToolsBoundingBox> {
         if (lines.isEmpty() || query.isBlank()) return emptyList()
         val cleanQuery = clean(query)
+        val cleanUser = clean(query.substringBefore("@"))
         val matches = mutableListOf<ToolsBoundingBox>()
 
         for (line in lines) {
             val cleanLineText = clean(line.text)
-            if (cleanLineText.contains(cleanQuery) || cleanQuery.contains(cleanLineText)) {
+            val isMatch = cleanLineText.contains(cleanQuery) || cleanQuery.contains(cleanLineText) ||
+                    (cleanUser.length >= 4 && cleanLineText.contains(cleanUser))
+
+            if (isMatch) {
                 if (line.words.isNotEmpty()) {
                     val matchingWords = line.words.filter { word ->
                         val cw = clean(word.text)
-                        cw.contains(cleanQuery) || cleanQuery.contains(cw)
+                        cw.contains(cleanQuery) || cleanQuery.contains(cw) ||
+                                (cleanUser.length >= 4 && cw.contains(cleanUser))
                     }
 
                     if (matchingWords.isNotEmpty()) {
