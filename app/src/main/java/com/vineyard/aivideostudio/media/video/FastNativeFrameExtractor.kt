@@ -67,22 +67,29 @@ class FastNativeFrameExtractor(private val context: Context) {
             val totalFrames = floor(durationSec * targetFps).toInt()
             val intervalUs = (1000000 / targetFps).toLong() // Microseconds
 
-            // Read original video dimensions for hardware-scaled decoding
-            val origWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            val origHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            // Read original video dimensions and rotation for hardware-scaled decoding
+            val rawWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val rawHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            
+            val isRotated = rotation == 90 || rotation == 270
+            val origWidth = if (isRotated) rawHeight else rawWidth
+            val origHeight = if (isRotated) rawWidth else rawHeight
 
             // Cap maximum dimension to 1280px to optimize decode speed and ML Kit OCR performance
             val maxAllowedDimension = 1280
-            var targetDecodeWidth = origWidth
-            var targetDecodeHeight = origHeight
+            var targetDecodeWidth = rawWidth
+            var targetDecodeHeight = rawHeight
 
             if (origWidth > 0 && origHeight > 0) {
                 if (origWidth >= origHeight && origWidth > maxAllowedDimension) {
-                    targetDecodeWidth = maxAllowedDimension
-                    targetDecodeHeight = (origHeight * (maxAllowedDimension.toFloat() / origWidth)).roundToInt()
+                    val scale = maxAllowedDimension.toFloat() / origWidth
+                    targetDecodeWidth = if (isRotated) (rawWidth * scale).roundToInt() else maxAllowedDimension
+                    targetDecodeHeight = if (isRotated) maxAllowedDimension else (rawHeight * scale).roundToInt()
                 } else if (origHeight > origWidth && origHeight > maxAllowedDimension) {
-                    targetDecodeHeight = maxAllowedDimension
-                    targetDecodeWidth = (origWidth * (maxAllowedDimension.toFloat() / origHeight)).roundToInt()
+                    val scale = maxAllowedDimension.toFloat() / origHeight
+                    targetDecodeWidth = if (isRotated) maxAllowedDimension else (rawWidth * scale).roundToInt()
+                    targetDecodeHeight = if (isRotated) (rawHeight * scale).roundToInt() else maxAllowedDimension
                 }
             }
 
@@ -114,8 +121,12 @@ class FastNativeFrameExtractor(private val context: Context) {
 
                 // 2. Save image to disk using JPEG with buffered stream (4x-8x faster than WebP on mobile)
                 val frameFile = File(workspaceDir, "frame_$i.jpg")
-                BufferedOutputStream(FileOutputStream(frameFile), 32768).use { outStream ->
-                    frameBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outStream)
+                try {
+                    BufferedOutputStream(FileOutputStream(frameFile), 32768).use { outStream ->
+                        frameBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outStream)
+                    }
+                } catch (writeErr: Exception) {
+                    writeErr.printStackTrace()
                 }
 
                 // Recycle decode bitmap immediately to free native graphics memory
@@ -149,7 +160,7 @@ class FastNativeFrameExtractor(private val context: Context) {
         } finally {
             try {
                 retriever.release()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Ignore release errors
             }
         }
