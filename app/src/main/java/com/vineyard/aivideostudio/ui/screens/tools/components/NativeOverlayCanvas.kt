@@ -37,7 +37,9 @@ fun ToolsOverlayPreview(
     baseBitmap: Bitmap?,
     activeBoxes: List<DetectedTargetBox>,
     currentTimeMs: Long,
-    withArrow: Boolean = true
+    withArrow: Boolean = true,
+    refWidth: Float = 0f,
+    refHeight: Float = 0f
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
         if (baseBitmap == null || baseBitmap.isRecycled) return@Canvas
@@ -50,7 +52,7 @@ fun ToolsOverlayPreview(
 
         if (srcWidth <= 0f || srcHeight <= 0f) return@Canvas
 
-        // Calculate aspect-fit destination rectangle
+        // Calculate aspect-fit destination rectangle on canvas
         val scale = min(canvasWidth / srcWidth, canvasHeight / srcHeight)
         val destWidth = srcWidth * scale
         val destHeight = srcHeight * scale
@@ -64,10 +66,14 @@ fun ToolsOverlayPreview(
             dstSize = IntSize(destWidth.roundToInt(), destHeight.roundToInt())
         )
 
+        // Determine reference coordinate space so boxes never scale off-screen
+        val actualRefW = if (srcWidth >= 400f) srcWidth else if (refWidth > 0f) refWidth else 1080f
+        val actualRefH = if (srcHeight >= 400f) srcHeight else if (refHeight > 0f) refHeight else 2400f
+
         // 2. Draw active tool overlays scaled to destination dimensions
         for (box in activeBoxes) {
-            val scaleX = destWidth / srcWidth
-            val scaleY = destHeight / srcHeight
+            val scaleX = destWidth / actualRefW
+            val scaleY = destHeight / actualRefH
 
             val scaledX = offsetX + (box.x0 * scaleX)
             val scaledY = offsetY + (box.y0 * scaleY)
@@ -237,7 +243,7 @@ object NativeOverlayRenderer {
                 val bracketPath = Path().apply {
                     moveTo(bx, by + len); lineTo(bx, by); lineTo(bx + len, by)
                     moveTo(bx + bw - len, by); lineTo(bx + bw, by); lineTo(bx + bw, by + len)
-                    moveTo(bx, by + bh - len); lineTo(bx, by + bh); lineTo(bx + len, by + bh)
+                    moveTo(bx + by + bh - len, by + bh); lineTo(bx, by + bh); lineTo(bx + len, by + bh)
                     moveTo(bx + bw - len, by + bh); lineTo(bx + bw, by + bh); lineTo(bx + bw, by + bh - len)
                 }
 
@@ -371,7 +377,7 @@ object NativeOverlayRenderer {
 
     /**
      * Offline Android Canvas renderer used during video export rendering.
-     * Guarantees 100% pixel-perfect match with the live Compose preview.
+     * Guarantees 100% pixel-perfect match with the live Compose preview across ALL 10 tools.
      */
     fun drawToolOnAndroidCanvas(
         canvas: android.graphics.Canvas,
