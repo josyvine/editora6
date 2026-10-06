@@ -2,7 +2,13 @@ package com.vineyard.aivideostudio.ui.screens.tools
 
 import android.app.Application
 import android.content.ContentValues
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
@@ -39,6 +45,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -48,6 +55,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.sin
 
 enum class LogType { INFO, SUCCESS, WARNING, ERROR, NET }
 
@@ -1000,12 +1008,14 @@ class ToolsViewModel(
         var filteredBoxes = state.rawDetectedZipBoxes
         val targetQuery = state.activeZipTarget.ifBlank { "Target" }
         val selectedTool = state.activeZipTool.ifBlank { "button_highlight" }
+        var activeCluster: SpatialCluster? = null
 
         // 1. Spatial Filter
         if (state.selectedZipClusterId != "all" && state.detectedZipClusters.isNotEmpty()) {
             val cl = state.detectedZipClusters.find { it.id.toString() == state.selectedZipClusterId }
             if (cl != null) {
                 filteredBoxes = cl.boxes
+                activeCluster = cl
             }
         }
 
@@ -1017,7 +1027,7 @@ class ToolsViewModel(
             }
         }
 
-        // 3. Audio Cue Sync Filter
+        // 3. Audio Cue Sync Filter (matches exact HTML frame-range logic)
         if (state.selectedAudioCueId != "all" && state.detectedAudioCues.isNotEmpty()) {
             val cue = state.detectedAudioCues.find { it.id.toString() == state.selectedAudioCueId }
             if (cue != null) {
@@ -1036,9 +1046,25 @@ class ToolsViewModel(
             if (hasDirect) f.copy(isHighlightEnabled = true) else f.copy(isHighlightEnabled = false)
         }
 
+        // Also synchronize activeRules with the ZIP source so overlays activate in Studio Viewer
+        val updatedRules = state.activeRules.filter { it.text != targetQuery }.toMutableList()
+        updatedRules.add(
+            TargetRule(
+                id = System.currentTimeMillis(),
+                text = targetQuery,
+                category = "ZIP: Active Filter",
+                tool = selectedTool,
+                isZipSource = true,
+                clusterCenter = activeCluster?.let {
+                    ClusterCenterPoint(it.centerX, it.centerY, it.threshold)
+                }
+            )
+        )
+
         _uiState.update { it.copy(
             directBlurs = blurMap,
             frames = updatedFrames,
+            activeRules = updatedRules,
             statusText = "Applied to ${blurMap.size} frames!",
             statusColorHex = "#10b981"
         )}
@@ -1174,43 +1200,299 @@ class ToolsViewModel(
     }
 
     // =========================================================
-    // VIDEO RENDERING WITH REAL-TIME PROGRESS BAR (TAB 3)
+    // VIDEO RENDERING PIPELINE (BURNS HIGHLIGHTS & ORIGINAL AUDIO)
     // =========================================================
     fun renderFullVideo() {
         val state = _uiState.value
-        if (state.frames.isEmpty()) {
+        val uri = state.videoUri
+        if (state.frames.isEmpty() || uri == null) {
             addLog("⚠️ No video frames extracted yet! Extract frames in Studio Viewer first.", LogType.WARNING)
             return
         }
 
         _uiState.update { it.copy(isRendering = true, renderPercent = 0, renderProgressStatus = "Preparing Video & Audio...") }
-        addLog("🎬 Starting Media3 Video Rendering with synchronized original audio...", LogType.INFO)
+        addLog("🎬 Starting full video rendering with original synchronized audio...", LogType.INFO)
 
-        viewModelScope.launch {
-            val total = state.frames.size
-            for (i in 0 until total) {
-                delay(40) // Simulates render pipeline loop
-                val pct = (((i + 1).toFloat() / total.toFloat()) * 100).toInt()
-                _uiState.update { it.copy(
-                    renderPercent = pct,
-                    renderProgressStatus = "Burning frame ${i + 1}/$total (Normal Speed Sync)..."
-                )}
+        viewModelScope.launch(Dispatchers.Default) {
+            val context = getApplication<Application>()
+            val tempAudioFile = File(context.cacheDir, "temp_render_audio.m4a")
+            val tempVideoFile = File(context.cacheDir, "temp_render_video.mp4")
+            val tempFinalFile = File(context.cacheDir, "temp_render_final.mp4")
+
+            try {
+                // Step 1: Extract audio track from original video
+                var hasAudio = false
+                try {
+                    extractAudioTrackNative(uri, tempAudioFile)
+                    hasAudio = tempAudioFile.exists() && tempAudioFile.length() > 0
+                } catch (audioErr: Exception) {
+                    addLog("⚠️ Audio extract skipped: ${audioErr.message}", LogType.WARNING)
+                }
+
+                // Step 2: Encode video frames with burned overlays using native MediaCodec
+                val outWidth = (state.videoWidth / 2) * 2
+                val outHeight = (state.videoHeight / 2) * 2
+                val fps = state.targetFps
+                val bitRate = 4_000_000 // 4 Mbps high quality
+
+                val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outWidth, outHeight).apply {
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                    setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                }
+
+                val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                val inputSurface = encoder.createInputSurface()
+                encoder.start()
+
+                val videoMuxer = MediaMuxer(tempVideoFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                var videoTrackIndex = -1
+                var muxerStarted = false
+
+                val bufferInfo = MediaCodec.BufferInfo()
+                val totalFrames = state.frames.size
+                val frameDurationUs = (1_000_000L / fps)
+
+                // Paint tools for burning overlays into video frames
+                val rectPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = 4f
+                }
+                val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.FILL
+                }
+
+                for (i in 0 until totalFrames) {
+                    val frameObj = state.frames[i]
+                    val ptsUs = i * frameDurationUs
+
+                    // Load full resolution frame
+                    val fullBitmap = try {
+                        val file = File(frameObj.fullResImagePath)
+                        if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else frameObj.thumbBitmap
+                    } catch (_: Exception) {
+                        frameObj.thumbBitmap
+                    } ?: continue
+
+                    // Lock surface canvas to burn overlays
+                    val surfaceCanvas: Canvas? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        inputSurface.lockHardwareCanvas()
+                    } else {
+                        inputSurface.lockCanvas(null)
+                    }
+
+                    if (surfaceCanvas != null) {
+                        try {
+                            surfaceCanvas.drawBitmap(fullBitmap, 0f, 0f, null)
+
+                            // Burn direct highlights if enabled
+                            if (frameObj.isHighlightEnabled) {
+                                val boxes = state.directBlurs[frameObj.index] ?: emptyList()
+                                val timeMs = (frameObj.timeSeconds * 1000).toLong()
+
+                                for (box in boxes) {
+                                    val pulse = (sin(timeMs * 0.010) * 0.5 + 0.5).toFloat()
+                                    val pad = 6f + pulse * 4f
+                                    val bx = box.x0 - pad
+                                    val by = box.y0 - pad
+                                    val bw = box.width + pad * 2f
+                                    val bh = box.height + pad * 2f
+
+                                    // Button Highlight (Pulsing Brackets)
+                                    fillPaint.color = android.graphics.Color.argb(
+                                        ((0.12f + pulse * 0.22f) * 255).toInt(), 245, 158, 11
+                                    )
+                                    surfaceCanvas.drawRect(bx, by, bx + bw, by + bh, fillPaint)
+
+                                    rectPaint.color = android.graphics.Color.rgb(245, 158, 11)
+                                    rectPaint.strokeWidth = 3f + pulse * 2f
+                                    surfaceCanvas.drawRect(bx, by, bx + bw, by + bh, rectPaint)
+                                }
+                            }
+                        } finally {
+                            inputSurface.unlockCanvasAndPost(surfaceCanvas)
+                        }
+                    }
+
+                    if (fullBitmap != frameObj.thumbBitmap) {
+                        fullBitmap.recycle()
+                    }
+
+                    // Drain encoder output buffers
+                    var outIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000)
+                    while (outIndex >= 0) {
+                        val encodedData = encoder.getOutputBuffer(outIndex)
+                        if (encodedData != null) {
+                            if (!muxerStarted) {
+                                val newFormat = encoder.outputFormat
+                                videoTrackIndex = videoMuxer.addTrack(newFormat)
+                                videoMuxer.start()
+                                muxerStarted = true
+                            }
+                            bufferInfo.presentationTimeUs = ptsUs
+                            videoMuxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                        }
+                        encoder.releaseOutputBuffer(outIndex, false)
+                        outIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
+                    }
+
+                    val pct = (((i + 1).toFloat() / totalFrames.toFloat()) * 100).toInt()
+                    _uiState.update { it.copy(
+                        renderPercent = pct,
+                        renderProgressStatus = "Burning frame ${i + 1}/$totalFrames (Normal Speed Sync)..."
+                    )}
+                }
+
+                // Signal end of stream
+                encoder.signalEndOfInputStream()
+                var outIndex = encoder.dequeueOutputBuffer(bufferInfo, 20000)
+                while (outIndex >= 0) {
+                    val encodedData = encoder.getOutputBuffer(outIndex)
+                    if (encodedData != null && muxerStarted) {
+                        videoMuxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                    }
+                    encoder.releaseOutputBuffer(outIndex, false)
+                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+                    outIndex = encoder.dequeueOutputBuffer(bufferInfo, 20000)
+                }
+
+                encoder.stop()
+                encoder.release()
+                inputSurface.release()
+
+                if (muxerStarted) {
+                    videoMuxer.stop()
+                    videoMuxer.release()
+                }
+
+                // Step 3: Combine encoded video track with original audio track
+                val finalExportFile = if (hasAudio && tempVideoFile.exists()) {
+                    mergeVideoAndAudio(tempVideoFile, tempAudioFile, tempFinalFile)
+                    tempFinalFile
+                } else {
+                    tempVideoFile
+                }
+
+                // Step 4: Export final video to device Movies / Downloads using MediaStore
+                val filename = "full_video_with_editora_effects_${System.currentTimeMillis()}.mp4"
+                saveVideoToMediaStore(finalExportFile, filename)
+
+                withContext(Dispatchers.Main) {
+                    _uiState.update { it.copy(
+                        isRendering = false,
+                        renderPercent = 100,
+                        renderProgressStatus = "Complete! Full video with audio exported to gallery.",
+                        statusText = "Full Video Downloaded",
+                        statusColorHex = "#10b981"
+                    )}
+                    addLog("🎉 SUCCESS: Full video rendered with synchronized audio and saved to gallery.", LogType.SUCCESS)
+                }
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    addLog("❌ Render Video Error: ${e.message}", LogType.ERROR)
+                    _uiState.update { it.copy(
+                        isRendering = false,
+                        renderProgressStatus = "Render Failed: ${e.message}",
+                        statusText = "Render Failed",
+                        statusColorHex = "#ef4444"
+                    )}
+                }
+            } finally {
+                tempAudioFile.delete()
+                tempVideoFile.delete()
+                tempFinalFile.delete()
             }
+        }
+    }
 
-            _uiState.update { it.copy(
-                isRendering = false,
-                renderPercent = 100,
-                renderProgressStatus = "Complete! Full video with audio exported.",
-                statusText = "Full Video Downloaded",
-                statusColorHex = "#10b981"
-            )}
-            addLog("🎉 SUCCESS: Full video rendered and saved to gallery.", LogType.SUCCESS)
+    private fun mergeVideoAndAudio(videoFile: File, audioFile: File, outputFile: File) {
+        val videoExtractor = MediaExtractor().apply { setDataSource(videoFile.absolutePath) }
+        val audioExtractor = MediaExtractor().apply { setDataSource(audioFile.absolutePath) }
+        val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+        var videoTrackIndex = -1
+        for (i in 0 until videoExtractor.trackCount) {
+            val format = videoExtractor.getTrackFormat(i)
+            if (format.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true) {
+                videoTrackIndex = muxer.addTrack(format)
+                videoExtractor.selectTrack(i)
+                break
+            }
+        }
+
+        var audioTrackIndex = -1
+        for (i in 0 until audioExtractor.trackCount) {
+            val format = audioExtractor.getTrackFormat(i)
+            if (format.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+                audioTrackIndex = muxer.addTrack(format)
+                audioExtractor.selectTrack(i)
+                break
+            }
+        }
+
+        muxer.start()
+        val buffer = ByteBuffer.allocate(64 * 1024)
+        val bufferInfo = MediaCodec.BufferInfo()
+
+        if (videoTrackIndex >= 0) {
+            while (true) {
+                val size = videoExtractor.readSampleData(buffer, 0)
+                if (size < 0) break
+                bufferInfo.offset = 0
+                bufferInfo.size = size
+                bufferInfo.presentationTimeUs = videoExtractor.sampleTime
+                bufferInfo.flags = videoExtractor.sampleFlags
+                muxer.writeSampleData(videoTrackIndex, buffer, bufferInfo)
+                videoExtractor.advance()
+            }
+        }
+
+        if (audioTrackIndex >= 0) {
+            while (true) {
+                val size = audioExtractor.readSampleData(buffer, 0)
+                if (size < 0) break
+                bufferInfo.offset = 0
+                bufferInfo.size = size
+                bufferInfo.presentationTimeUs = audioExtractor.sampleTime
+                bufferInfo.flags = audioExtractor.sampleFlags
+                muxer.writeSampleData(audioTrackIndex, buffer, bufferInfo)
+                audioExtractor.advance()
+            }
+        }
+
+        muxer.stop()
+        muxer.release()
+        videoExtractor.release()
+        audioExtractor.release()
+    }
+
+    private fun saveVideoToMediaStore(sourceFile: File, displayName: String) {
+        val context = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Editora")
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw Exception("Could not allocate MediaStore video entry.")
+            resolver.openOutputStream(uri)?.use { os ->
+                FileInputStream(sourceFile).copyTo(os)
+            }
+        } else {
+            val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+            val dest = File(moviesDir, displayName)
+            sourceFile.copyTo(dest, overwrite = true)
         }
     }
 
     /**
      * Saves text/JSON payloads directly to public Downloads folder using MediaStore (Android 10+ compliant).
-     * Eliminates "EACCES (Permission denied)" without requiring legacy permissions.
      */
     private fun saveTextFileToStorage(content: String, filename: String) {
         val context = getApplication<Application>()
@@ -1234,7 +1516,6 @@ class ToolsViewModel(
             }
             addLog("💾 Downloaded $filename to device Downloads folder.", LogType.SUCCESS)
         } catch (e: Exception) {
-            // Fallback to internal/external app storage if device content provider throws
             try {
                 val fallbackFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), filename)
                 fallbackFile.writeText(content)
