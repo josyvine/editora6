@@ -4,7 +4,9 @@ import android.app.Application
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
@@ -24,7 +26,6 @@ import com.vineyard.aivideostudio.media.video.ExtractedFrame
 import com.vineyard.aivideostudio.media.video.FastNativeFrameExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,6 +81,8 @@ data class AudioCueUiModel(
 
 data class ToolsUiState(
     val videoUri: Uri? = null,
+    val videoWidth: Int = 1080,
+    val videoHeight: Int = 2400,
     val isPlaying: Boolean = false,
     val isAudioMuted: Boolean = false,
     val isArrowPointerEnabled: Boolean = true,
@@ -112,6 +115,8 @@ data class ToolsUiState(
     ),
 
     // Auto-Scan ZIP State (Step 2)
+    val activeZipTarget: String = "",
+    val activeZipTool: String = "button_highlight",
     val rawDetectedZipBoxes: List<DetectedTargetBox> = emptyList(),
     val detectedZipClusters: List<SpatialCluster> = emptyList(),
     val selectedZipClusterId: String = "all",
@@ -152,6 +157,7 @@ class ToolsViewModel(
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
     private var playbackJob: Job? = null
     private var extractionJob: Job? = null
+    private var mediaPlayer: MediaPlayer? = null
 
     init {
         val savedKey = geminiPreferences.getApiKey()
@@ -181,16 +187,61 @@ class ToolsViewModel(
     // VIDEO LOAD & FRAME EXTRACTION
     // =========================================================
     fun setVideoUri(uri: Uri) {
-        // Clear workspace ONLY when a new video is explicitly selected
         frameExtractor.clearWorkspace()
+        releaseMediaPlayer()
+
+        var vWidth = 1080
+        var vHeight = 2400
+
+        try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(getApplication<Application>(), uri)
+            val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 1080
+            val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 2400
+            val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (rot == 90 || rot == 270) {
+                vWidth = h
+                vHeight = w
+            } else {
+                vWidth = w
+                vHeight = h
+            }
+            retriever.release()
+        } catch (_: Exception) {}
+
+        initMediaPlayer(uri)
+
         _uiState.update { 
             ToolsUiState(
                 videoUri = uri,
+                videoWidth = vWidth,
+                videoHeight = vHeight,
                 geminiApiKey = it.geminiApiKey,
                 activeLogEntries = it.activeLogEntries
             ) 
         }
-        addLog("📹 Video loaded into Native Studio workspace.", LogType.INFO)
+        addLog("📹 Video loaded into Native Studio workspace ($vWidth x $vHeight).", LogType.INFO)
+    }
+
+    private fun initMediaPlayer(uri: Uri) {
+        try {
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(getApplication<Application>(), uri)
+                prepare()
+                val vol = if (_uiState.value.isAudioMuted) 0f else 1f
+                setVolume(vol, vol)
+            }
+        } catch (e: Exception) {
+            addLog("⚠️ Notice: Audio player initialization skipped (${e.message})", LogType.WARNING)
+        }
+    }
+
+    private fun releaseMediaPlayer() {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (_: Exception) {}
+        mediaPlayer = null
     }
 
     fun extractAllFrames(targetFps: Int = 12) {
@@ -235,7 +286,7 @@ class ToolsViewModel(
     }
 
     // =========================================================
-    // VIDEO TRANSPORT, STEPPING & SLOT CYCLE
+    // VIDEO TRANSPORT, STEPPING, AUDIO & SLOT CYCLE
     // =========================================================
     fun togglePlayPause() {
         if (_uiState.value.isPlaying) pausePlayback() else startPlayback()
@@ -249,6 +300,15 @@ class ToolsViewModel(
         if (state.slotStep == 1) {
             _uiState.update { it.copy(slotStep = 2) }
         }
+
+        // Synchronize and start native audio playback
+        try {
+            val seekMs = (state.currentFrameIndex * (1000f / state.targetFps)).toLong()
+            mediaPlayer?.seekTo(seekMs.toInt())
+            val vol = if (state.isAudioMuted) 0f else 1f
+            mediaPlayer?.setVolume(vol, vol)
+            mediaPlayer?.start()
+        } catch (_: Exception) {}
 
         playbackJob?.cancel()
         playbackJob = viewModelScope.launch {
@@ -271,8 +331,11 @@ class ToolsViewModel(
 
     private fun pausePlayback() {
         playbackJob?.cancel()
+        try {
+            mediaPlayer?.pause()
+        } catch (_: Exception) {}
+
         val state = _uiState.value
-        
         var newSlotStep = state.slotStep
         var newSlotStart = state.slotStartFrame
         var newSlotEnd = state.slotEndFrame
@@ -295,22 +358,43 @@ class ToolsViewModel(
 
     fun stepFrame(delta: Int) {
         playbackJob?.cancel()
+        try { mediaPlayer?.pause() } catch (_: Exception) {}
+
         val state = _uiState.value
         if (state.frames.isEmpty()) return
         val newIndex = (state.currentFrameIndex + delta).coerceIn(0, state.frames.size - 1)
+        
+        try {
+            val seekMs = (newIndex * (1000f / state.targetFps)).toLong()
+            mediaPlayer?.seekTo(seekMs.toInt())
+        } catch (_: Exception) {}
+
         _uiState.update { it.copy(isPlaying = false, currentFrameIndex = newIndex) }
     }
 
     fun seekToFrame(index: Int) {
         playbackJob?.cancel()
-        _uiState.update { it.copy(
-            isPlaying = false,
-            currentFrameIndex = index.coerceIn(0, maxOf(0, it.frames.size - 1))
-        )}
+        try { mediaPlayer?.pause() } catch (_: Exception) {}
+
+        val state = _uiState.value
+        val safeIndex = index.coerceIn(0, maxOf(0, state.frames.size - 1))
+        
+        try {
+            val seekMs = (safeIndex * (1000f / state.targetFps)).toLong()
+            mediaPlayer?.seekTo(seekMs.toInt())
+        } catch (_: Exception) {}
+
+        _uiState.update { it.copy(isPlaying = false, currentFrameIndex = safeIndex) }
     }
 
     fun toggleAudioMute() {
-        _uiState.update { it.copy(isAudioMuted = !it.isAudioMuted) }
+        val newMute = !_uiState.value.isAudioMuted
+        _uiState.update { it.copy(isAudioMuted = newMute) }
+        try {
+            val vol = if (newMute) 0f else 1f
+            mediaPlayer?.setVolume(vol, vol)
+        } catch (_: Exception) {}
+        addLog(if (newMute) "🔇 Audio muted." else "🔊 Audio unmuted (100% Volume).", LogType.INFO)
     }
 
     fun toggleFrameHighlight(frameIndex: Int) {
@@ -419,7 +503,9 @@ class ToolsViewModel(
             }
         }
 
-        val clusters = SpatialClusterer.clusterBoxes(allMatches, 1080, 1920)
+        val refW = _uiState.value.videoWidth
+        val refH = _uiState.value.videoHeight
+        val clusters = SpatialClusterer.clusterBoxes(allMatches, refW, refH)
         _uiState.update { it.copy(detectedClusters = clusters) }
     }
 
@@ -825,7 +911,8 @@ class ToolsViewModel(
 
     fun fetchZipFromUrl(urlStr: String, filterText: String, selectedTool: String) {
         if (urlStr.isBlank()) return
-        addLog("🌐 Fetching ZIP from URL: $urlStr...", LogType.NET)
+        val actualQuery = if (filterText.isBlank()) "Target" else filterText.trim()
+        addLog("🌐 Fetching ZIP from URL: $urlStr for '$actualQuery'...", LogType.NET)
         _uiState.update { it.copy(isProcessing = true, statusText = "Fetching ZIP...", statusColorHex = "#eab308") }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -839,8 +926,8 @@ class ToolsViewModel(
                     throw Exception("HTTP ${connection.responseCode}: ${connection.responseMessage}")
                 }
 
-                val zipResult = NativeTimelineZipManager.parseZip(connection.inputStream, filterText, selectedTool)
-                processZipResult(zipResult, filterText, selectedTool)
+                val zipResult = NativeTimelineZipManager.parseZip(connection.inputStream, actualQuery, selectedTool)
+                processZipResult(zipResult, actualQuery, selectedTool)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     addLog("❌ ZIP Fetch Failed: ${e.message}", LogType.ERROR)
@@ -850,8 +937,9 @@ class ToolsViewModel(
         }
     }
 
-    fun processLocalZip(uri: Uri) {
-        addLog("📂 Loading ZIP archive from device storage...", LogType.INFO)
+    fun processLocalZip(uri: Uri, targetQuery: String = "Target", selectedTool: String = "button_highlight") {
+        val actualQuery = if (targetQuery.isBlank()) "Target" else targetQuery.trim()
+        addLog("📂 Loading ZIP archive from device storage for target: '$actualQuery'...", LogType.INFO)
         _uiState.update { it.copy(isProcessing = true, statusText = "Analyzing ZIP...", statusColorHex = "#eab308") }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -859,8 +947,8 @@ class ToolsViewModel(
                 val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
                     ?: throw Exception("Could not open ZIP stream.")
                 
-                val zipResult = NativeTimelineZipManager.parseZip(inputStream, "Target", "button_highlight")
-                processZipResult(zipResult, "Target", "button_highlight")
+                val zipResult = NativeTimelineZipManager.parseZip(inputStream, actualQuery, selectedTool)
+                processZipResult(zipResult, actualQuery, selectedTool)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     addLog("❌ Local ZIP Error: ${e.message}", LogType.ERROR)
@@ -879,11 +967,15 @@ class ToolsViewModel(
             return
         }
 
-        val clusters = SpatialClusterer.clusterBoxes(result.detectedBoxes, 1080, 1920)
+        val refW = _uiState.value.videoWidth
+        val refH = _uiState.value.videoHeight
+        val clusters = SpatialClusterer.clusterBoxes(result.detectedBoxes, refW, refH)
         val timeSlots = SpatialClusterer.segmentTimeSlots(result.detectedBoxes, _uiState.value.targetFps)
 
         withContext(Dispatchers.Main) {
             _uiState.update { it.copy(
+                activeZipTarget = targetQuery,
+                activeZipTool = selectedTool,
                 rawDetectedZipBoxes = result.detectedBoxes,
                 detectedZipClusters = clusters,
                 detectedZipTimeSlots = timeSlots,
@@ -903,6 +995,8 @@ class ToolsViewModel(
         if (state.rawDetectedZipBoxes.isEmpty()) return
 
         var filteredBoxes = state.rawDetectedZipBoxes
+        val targetQuery = state.activeZipTarget.ifBlank { "Target" }
+        val selectedTool = state.activeZipTool.ifBlank { "button_highlight" }
 
         // 1. Spatial Filter
         if (state.selectedZipClusterId != "all" && state.detectedZipClusters.isNotEmpty()) {
@@ -920,7 +1014,7 @@ class ToolsViewModel(
             }
         }
 
-        // 3. Audio Cue Sync Filter
+        // 3. Audio Cue Sync Filter (matches exact HTML frame-range logic)
         if (state.selectedAudioCueId != "all" && state.detectedAudioCues.isNotEmpty()) {
             val cue = state.detectedAudioCues.find { it.id.toString() == state.selectedAudioCueId }
             if (cue != null) {
@@ -1047,8 +1141,8 @@ class ToolsViewModel(
         }
 
         val json = NativeTimelineZipManager.exportHighlightedFramesJson(
-            tool = "button_highlight",
-            target = state.activeRules.firstOrNull()?.text ?: "Target",
+            tool = state.activeZipTool.ifBlank { "button_highlight" },
+            target = state.activeZipTarget.ifBlank { state.activeRules.firstOrNull()?.text ?: "Target" },
             location = "All Locations",
             timeline = "All Time Slots",
             audio = "All Cues",
@@ -1165,8 +1259,7 @@ class ToolsViewModel(
     override fun onCleared() {
         super.onCleared()
         playbackJob?.cancel()
-        // Do NOT wipe frames workspace here so that tab navigation or task switching
-        // leaves extracted video frames and OCR results intact.
+        releaseMediaPlayer()
         ocrEngine.close()
     }
 }
