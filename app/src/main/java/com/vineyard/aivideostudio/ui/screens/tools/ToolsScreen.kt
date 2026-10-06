@@ -1,5 +1,7 @@
 package com.vineyard.aivideostudio.ui.screens.tools
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +55,9 @@ import com.vineyard.aivideostudio.media.tools.DetectedTargetBox
 import com.vineyard.aivideostudio.media.tools.SpatialClusterer
 import com.vineyard.aivideostudio.media.video.ExtractedFrame
 import com.vineyard.aivideostudio.ui.screens.tools.components.ToolsOverlayPreview
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 // Custom Colors matching Video OCR Studio theme
 private val BgDark = Color(0xFF090D16)
@@ -183,15 +188,32 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
             .padding(bottom = 8.dp)
     ) {
         Column {
-            // Canvas Box
+            // High-Definition Canvas Box
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(220.dp),
+                    .height(240.dp),
                 contentAlignment = Alignment.Center
             ) {
                 val currentFrame = state.frames.getOrNull(state.currentFrameIndex)
                 if (currentFrame != null) {
+                    // Asynchronously load the crisp full-resolution frame from disk,
+                    // falling back to thumbBitmap only while decoding
+                    val fullBitmapState by produceState<Bitmap?>(initialValue = currentFrame.thumbBitmap, currentFrame.index) {
+                        value = withContext(Dispatchers.IO) {
+                            try {
+                                val file = File(currentFrame.fullResImagePath)
+                                if (file.exists()) {
+                                    BitmapFactory.decodeFile(file.absolutePath)
+                                } else {
+                                    currentFrame.thumbBitmap
+                                }
+                            } catch (_: Exception) {
+                                currentFrame.thumbBitmap
+                            }
+                        }
+                    }
+
                     val activeBoxes = remember(
                         currentFrame.index,
                         state.directBlurs,
@@ -221,7 +243,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                     }
 
                     ToolsOverlayPreview(
-                        baseBitmap = currentFrame.thumbBitmap,
+                        baseBitmap = fullBitmapState ?: currentFrame.thumbBitmap,
                         activeBoxes = if (currentFrame.isHighlightEnabled) activeBoxes else emptyList(),
                         currentTimeMs = (currentFrame.timeSeconds * 1000).toLong(),
                         withArrow = state.isArrowPointerEnabled
@@ -734,7 +756,6 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onToggle: (
 // =========================================================================
 @Composable
 private fun ExportDataWizardTab(viewModel: ToolsViewModel, state: ToolsUiState) {
-    // Redundant top 3-step pill bar removed to eliminate clutter and save vertical screen space
     when (state.wizardStep) {
         1 -> WizardStep1(viewModel, state)
         2 -> WizardStep2(viewModel, state)
