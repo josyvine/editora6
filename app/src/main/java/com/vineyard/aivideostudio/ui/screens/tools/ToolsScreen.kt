@@ -276,19 +276,37 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // Play / Pause Button
                     Button(
                         onClick = { viewModel.togglePlayPause() },
                         colors = ButtonDefaults.buttonColors(containerColor = if (state.isPlaying) WarningYellow else PrimaryBlue),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1.2f)
+                        modifier = Modifier.weight(1.1f)
                     ) {
                         Text(if (state.isPlaying) "Pause" else "Play", color = if (state.isPlaying) Color.Black else Color.White, fontSize = 12.sp)
                     }
+
+                    // SOUND ON / SOUND OFF TOGGLE BUTTON (Restored from HTML)
+                    Button(
+                        onClick = { viewModel.toggleAudioMute() },
+                        colors = ButtonDefaults.buttonColors(containerColor = if (state.isAudioMuted) SurfaceVariant else Color(0xFF1E1B4B)),
+                        border = BorderStroke(1.dp, if (state.isAudioMuted) BorderColor else AccentBlue),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1.1f)
+                    ) {
+                        Text(
+                            text = if (state.isAudioMuted) "🔇 Sound OFF" else "🔊 Sound ON",
+                            color = if (state.isAudioMuted) Color.LightGray else AccentBlue,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
                     Button(
                         onClick = { viewModel.stepFrame(-1) },
                         colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(0.9f)
                     ) {
                         Text("-1 Frame", color = Color.White, fontSize = 11.sp)
                     }
@@ -296,7 +314,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                         onClick = { viewModel.stepFrame(1) },
                         colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(0.9f)
                     ) {
                         Text("+1 Frame", color = Color.White, fontSize = 11.sp)
                     }
@@ -304,7 +322,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                         onClick = { viewModel.scanCurrentFrame() },
                         colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1.2f)
+                        modifier = Modifier.weight(1.1f)
                     ) {
                         Text("Scan #${state.currentFrameIndex}", color = Color.White, fontSize = 11.sp)
                     }
@@ -837,10 +855,24 @@ private fun WizardStep1(viewModel: ToolsViewModel, state: ToolsUiState) {
 // Step 2: Auto-Scan ZIP with Spatial, Temporal & Audio Sync
 @Composable
 private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
+    var filterText by remember { mutableStateOf("") }
+    var zipUrl by remember { mutableStateOf("https://raw.githubusercontent.com/josyvine/GitHub-zip/main/file/frames_timeline_data.zip") }
+    var selectedZipTool by remember { mutableStateOf("button_highlight") }
+    var audioFilterQuery by remember { mutableStateOf("") }
+
+    var zipToolExpanded by remember { mutableStateOf(false) }
+    var zipClusterExpanded by remember { mutableStateOf(false) }
+    var zipTimeSlotExpanded by remember { mutableStateOf(false) }
+    var audioCueExpanded by remember { mutableStateOf(false) }
+
+    // Use rememberUpdatedState so launcher always reads the user's latest typed target word and selected tool
+    val currentFilterText by rememberUpdatedState(filterText)
+    val currentSelectedTool by rememberUpdatedState(selectedZipTool)
+
     val localZipPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let { viewModel.processLocalZip(it) }
+        uri?.let { viewModel.processLocalZip(it, currentFilterText, currentSelectedTool) }
     }
 
     val externalTranscriptPicker = rememberLauncherForActivityResult(
@@ -855,16 +887,6 @@ private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        var filterText by remember { mutableStateOf("") }
-        var zipUrl by remember { mutableStateOf("https://raw.githubusercontent.com/josyvine/GitHub-zip/main/file/frames_timeline_data.zip") }
-        var selectedZipTool by remember { mutableStateOf("button_highlight") }
-        var audioFilterQuery by remember { mutableStateOf("") }
-
-        var zipToolExpanded by remember { mutableStateOf(false) }
-        var zipClusterExpanded by remember { mutableStateOf(false) }
-        var zipTimeSlotExpanded by remember { mutableStateOf(false) }
-        var audioCueExpanded by remember { mutableStateOf(false) }
-
         Column(Modifier.padding(10.dp)) {
             Text("Auto-Scan ZIP & Apply Editora4 Tool", color = Color(0xFFE9D5FF), fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
@@ -1016,7 +1038,7 @@ private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
                                 )
                                 state.detectedAudioCues.forEach { cue ->
                                     DropdownMenuItem(
-                                        text = { Text("🎙️ Cue ${cue.id + 1}: ${cue.startTime}s ➔ ${cue.endTime}s (\"${cue.snippet}\")") },
+                                        text = { Text("🎙️ Cue ${cue.id + 1}: ${cue.startTime}s ➔ ${cue.endTime}s (\"${cue.snippet}\" • Fr ${cue.startFrame}-${cue.endFrame})") },
                                         onClick = { viewModel.setAudioCueFilter(cue.id.toString()); audioCueExpanded = false }
                                     )
                                 }
