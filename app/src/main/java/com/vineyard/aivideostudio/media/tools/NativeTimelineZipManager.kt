@@ -4,7 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -77,24 +77,26 @@ object NativeTimelineZipManager {
         }
 
         val textFilesMap = mutableMapOf<Int, String>()
-        val zipIn = ZipInputStream(zipInputStreamSource)
+        val bufferedIn = BufferedInputStream(zipInputStreamSource, 65536)
+        val zipIn = ZipInputStream(bufferedIn)
 
         try {
             var entry: ZipEntry? = zipIn.nextEntry
             while (entry != null) {
-                val entryName = entry.name.lowercase()
+                val fullPath = entry.name.lowercase()
+                val fileNameOnly = fullPath.substringAfterLast('/')
 
                 // Check for embedded transcript/subtitles
-                if (entryName.contains("transcript") || entryName.contains("subtitles") ||
-                    entryName.endsWith(".srt") || entryName.endsWith(".vtt") || entryName.endsWith(".json")
+                if (fileNameOnly.contains("transcript") || fileNameOnly.contains("subtitles") ||
+                    fileNameOnly.endsWith(".srt") || fileNameOnly.endsWith(".vtt") || fileNameOnly.endsWith(".json")
                 ) {
                     val content = readEntryAsString(zipIn)
                     val cues = parseTranscript(content)
                     if (cues.isNotEmpty()) {
                         parsedTranscript = cues.toMutableList()
                     }
-                } else if (entryName.endsWith(".txt")) {
-                    val frameNumber = extractFrameIndexFromName(entryName)
+                } else if (fileNameOnly.endsWith(".txt") && !fileNameOnly.contains("transcript")) {
+                    val frameNumber = extractFrameIndexFromName(fileNameOnly)
                     val content = readEntryAsString(zipIn)
                     textFilesMap[frameNumber] = content
                     scannedFilesCount++
@@ -111,10 +113,10 @@ object NativeTimelineZipManager {
             } catch (_: Exception) {}
         }
 
-        // Sort frames sequentially
+        // Sort frames sequentially by index
         val sortedKeys = textFilesMap.keys.sorted()
-        for (frameIdx in sortedKeys) {
-            val content = textFilesMap[frameIdx] ?: continue
+        for (fallbackIdx in sortedKeys) {
+            val content = textFilesMap[fallbackIdx] ?: continue
             val markerIdx = content.indexOf(JSON_MARKER)
             if (markerIdx == -1) continue
 
@@ -122,6 +124,9 @@ object NativeTimelineZipManager {
             try {
                 val ocrObj = JSONObject(jsonString)
                 val linesArray = ocrObj.optJSONArray("lines") ?: JSONArray()
+                
+                // Prioritize the frame index recorded inside the JSON payload
+                val frameIdx = ocrObj.optInt("frame", fallbackIdx)
                 val frameTime = ocrObj.optDouble("time", (frameIdx / 12.0)).toFloat()
 
                 for (l in 0 until linesArray.length()) {
@@ -135,12 +140,13 @@ object NativeTimelineZipManager {
                     if (isMatch) {
                         val bboxObj = lineObj.optJSONObject("bbox")
                         val lineBox = if (bboxObj != null) {
-                            ToolsBoundingBox(
-                                x0 = bboxObj.optDouble("x0", 0.0).toFloat(),
-                                y0 = bboxObj.optDouble("y0", 0.0).toFloat(),
-                                width = bboxObj.optDouble("width", 100.0).toFloat(),
-                                height = bboxObj.optDouble("height", 30.0).toFloat()
-                            )
+                            val x0 = bboxObj.optDouble("x0", 0.0).toFloat()
+                            val y0 = bboxObj.optDouble("y0", 0.0).toFloat()
+                            val width = if (bboxObj.has("width")) bboxObj.optDouble("width", 100.0).toFloat()
+                                        else (bboxObj.optDouble("x1", (x0 + 100.0)) - x0).toFloat()
+                            val height = if (bboxObj.has("height")) bboxObj.optDouble("height", 30.0).toFloat()
+                                         else (bboxObj.optDouble("y1", (y0 + 30.0)) - y0).toFloat()
+                            ToolsBoundingBox(x0, y0, width, height)
                         } else {
                             ToolsBoundingBox(0f, 0f, 100f, 30f)
                         }
@@ -156,14 +162,13 @@ object NativeTimelineZipManager {
                             if (cleanTarget.isEmpty() || wordClean.contains(cleanTarget) || (userPart.length >= 4 && wordClean.contains(userPart))) {
                                 val wb = wordObj.optJSONObject("bbox")
                                 if (wb != null) {
-                                    matchedWordBoxes.add(
-                                        ToolsBoundingBox(
-                                            x0 = wb.optDouble("x0", 0.0).toFloat(),
-                                            y0 = wb.optDouble("y0", 0.0).toFloat(),
-                                            width = wb.optDouble("width", 50.0).toFloat(),
-                                            height = wb.optDouble("height", 25.0).toFloat()
-                                        )
-                                    )
+                                    val wx0 = wb.optDouble("x0", 0.0).toFloat()
+                                    val wy0 = wb.optDouble("y0", 0.0).toFloat()
+                                    val ww = if (wb.has("width")) wb.optDouble("width", 50.0).toFloat()
+                                             else (wb.optDouble("x1", (wx0 + 50.0)) - wx0).toFloat()
+                                    val wh = if (wb.has("height")) wb.optDouble("height", 25.0).toFloat()
+                                             else (wb.optDouble("y1", (wy0 + 25.0)) - wy0).toFloat()
+                                    matchedWordBoxes.add(ToolsBoundingBox(wx0, wy0, ww, wh))
                                 }
                             }
                         }
@@ -373,7 +378,6 @@ object NativeTimelineZipManager {
         root.put("timeline", timeline)
         root.put("audio", audio)
 
-        // Group boxes by frame
         val frameMap = LinkedHashMap<Int, MutableList<DetectedTargetBox>>()
         for (b in frames) {
             frameMap.getOrPut(b.frame) { mutableListOf() }.add(b)
@@ -419,7 +423,8 @@ object NativeTimelineZipManager {
     }
 
     private fun extractFrameIndexFromName(name: String): Int {
-        val numbersOnly = name.filter { it.isDigit() }
+        val fileNameOnly = name.substringAfterLast('/')
+        val numbersOnly = fileNameOnly.filter { it.isDigit() }
         return numbersOnly.toIntOrNull() ?: 0
     }
 }
