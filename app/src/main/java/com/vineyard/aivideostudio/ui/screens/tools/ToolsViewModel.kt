@@ -1,6 +1,7 @@
 package com.vineyard.aivideostudio.ui.screens.tools
 
 import android.app.Application
+import android.content.ContentValues
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -8,7 +9,9 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vineyard.aivideostudio.data.preferences.GeminiPreferences
@@ -301,7 +304,6 @@ class ToolsViewModel(
             _uiState.update { it.copy(slotStep = 2) }
         }
 
-        // Synchronize and start native audio playback
         try {
             val seekMs = (state.currentFrameIndex * (1000f / state.targetFps)).toLong()
             mediaPlayer?.seekTo(seekMs.toInt())
@@ -683,7 +685,6 @@ class ToolsViewModel(
         }
 
         saveTextFileToStorage(jsonArray.toString(2), "transcript.json")
-        addLog("💾 Downloaded transcript.json to device Downloads folder.", LogType.SUCCESS)
     }
 
     // =========================================================
@@ -796,6 +797,8 @@ class ToolsViewModel(
                     filterAudioCues("")
                 }
 
+                // Auto-save transcript to device Downloads folder via MediaStore
+                saveTextFileToStorage(rawText, "transcript.json")
                 addLog("========================================", LogType.INFO)
 
             } catch (e: Exception) {
@@ -1014,7 +1017,7 @@ class ToolsViewModel(
             }
         }
 
-        // 3. Audio Cue Sync Filter (matches exact HTML frame-range logic)
+        // 3. Audio Cue Sync Filter
         if (state.selectedAudioCueId != "all" && state.detectedAudioCues.isNotEmpty()) {
             val cue = state.detectedAudioCues.find { it.id.toString() == state.selectedAudioCueId }
             if (cue != null) {
@@ -1098,7 +1101,6 @@ class ToolsViewModel(
     fun downloadCoordinatesJson() {
         val json = _uiState.value.exportedCoordinatesJson
         saveTextFileToStorage(json, "active_highlighted_frames.json")
-        addLog("💾 Downloaded active_highlighted_frames.json to Downloads folder.", LogType.SUCCESS)
     }
 
     fun downloadTimelineZip() {
@@ -1109,26 +1111,45 @@ class ToolsViewModel(
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val zipFrames = scanned.values.map { ocr ->
-                    ZipOcrFrame(
-                        frameIndex = ocr.frameIndex,
-                        time = ocr.time,
-                        lines = ocr.lines,
-                        rawJson = ocr.toJsonString()
-                    )
-                }
+            val context = getApplication<Application>()
+            val zipFrames = scanned.values.map { ocr ->
+                ZipOcrFrame(
+                    frameIndex = ocr.frameIndex,
+                    time = ocr.time,
+                    lines = ocr.lines,
+                    rawJson = ocr.toJsonString()
+                )
+            }
 
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val zipFile = File(downloadsDir, "frames_timeline_data.zip")
-                val fos = FileOutputStream(zipFile)
-                NativeTimelineZipManager.createTimelineZip(zipFrames, fos)
+            val filename = "frames_timeline_data.zip"
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: throw Exception("Could not allocate MediaStore entry for ZIP.")
+                    resolver.openOutputStream(uri)?.use { os ->
+                        NativeTimelineZipManager.createTimelineZip(zipFrames, os)
+                    }
+                } else {
+                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    val zipFile = File(downloadsDir, filename)
+                    FileOutputStream(zipFile).use { fos ->
+                        NativeTimelineZipManager.createTimelineZip(zipFrames, fos)
+                    }
+                }
 
                 withContext(Dispatchers.Main) {
-                    addLog("📦 Downloaded ZIP (${zipFrames.size} files) to ${zipFile.name}.", LogType.SUCCESS)
+                    addLog("📦 Downloaded ZIP (${zipFrames.size} files) to Downloads folder.", LogType.SUCCESS)
                 }
             } catch (e: Exception) {
-                addLog("❌ ZIP Export Error: ${e.message}", LogType.ERROR)
+                withContext(Dispatchers.Main) {
+                    addLog("❌ ZIP Export Error: ${e.message}", LogType.ERROR)
+                }
             }
         }
     }
@@ -1187,13 +1208,40 @@ class ToolsViewModel(
         }
     }
 
+    /**
+     * Saves text/JSON payloads directly to public Downloads folder using MediaStore (Android 10+ compliant).
+     * Eliminates "EACCES (Permission denied)" without requiring legacy permissions.
+     */
     private fun saveTextFileToStorage(content: String, filename: String) {
+        val context = getApplication<Application>()
         try {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val file = File(downloadsDir, filename)
-            file.writeText(content)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw Exception("Could not allocate MediaStore entry.")
+                resolver.openOutputStream(uri)?.use { os ->
+                    os.write(content.toByteArray(Charsets.UTF_8))
+                }
+            } else {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val file = File(downloadsDir, filename)
+                file.writeText(content)
+            }
+            addLog("💾 Downloaded $filename to device Downloads folder.", LogType.SUCCESS)
         } catch (e: Exception) {
-            addLog("❌ File Save Error: ${e.message}", LogType.ERROR)
+            // Fallback to internal/external app storage if device content provider throws
+            try {
+                val fallbackFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), filename)
+                fallbackFile.writeText(content)
+                addLog("💾 Saved $filename to app storage: ${fallbackFile.name}", LogType.SUCCESS)
+            } catch (_: Exception) {
+                addLog("❌ File Save Error: ${e.message}", LogType.ERROR)
+            }
         }
     }
 
