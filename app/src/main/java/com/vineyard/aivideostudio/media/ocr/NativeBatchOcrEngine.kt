@@ -12,6 +12,7 @@ import com.vineyard.aivideostudio.media.tools.OcrLineData
 import com.vineyard.aivideostudio.media.tools.OcrWordData
 import com.vineyard.aivideostudio.media.tools.ToolsBoundingBox
 import com.vineyard.aivideostudio.media.video.ExtractedFrame
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -37,7 +38,8 @@ data class FrameOcrData(
     fun toJsonString(): String {
         val root = JSONObject()
         root.put("frame", frameIndex)
-        root.put("time", String.format(Locale.US, "%.2f", time))
+        val formattedTime = String.format(Locale.US, "%.2f", time).toDoubleOrNull() ?: time.toDouble()
+        root.put("time", formattedTime)
 
         val linesArray = JSONArray()
         for (line in lines) {
@@ -106,6 +108,8 @@ class NativeBatchOcrEngine {
                 time = frame.timeSeconds,
                 lines = extractedLines
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             FrameOcrData(frame.index, frame.timeSeconds, emptyList())
@@ -192,7 +196,7 @@ class NativeBatchOcrEngine {
                     val rDiff = abs((pixelA shr 16 and 0xFF) - (pixelB shr 16 and 0xFF))
                     val gDiff = abs((pixelA shr 8 and 0xFF) - (pixelB shr 8 and 0xFF))
                     val bDiff = abs((pixelA and 0xFF) - (pixelB and 0xFF))
-                    if (rDiff + gDiff + bDiff > 40) { // Color distance threshold
+                    if (rDiff + gDiff + bDiff > 40) { // Color distance threshold (filters compression noise)
                         diffCount++
                     }
                 }
