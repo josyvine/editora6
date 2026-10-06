@@ -17,6 +17,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -272,59 +286,85 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                     )
                 }
 
+                // Professional Icon-Only Transport Buttons Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Play / Pause Button
+                    // Play / Pause Icon Button
                     Button(
                         onClick = { viewModel.togglePlayPause() },
                         colors = ButtonDefaults.buttonColors(containerColor = if (state.isPlaying) WarningYellow else PrimaryBlue),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1.1f)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Text(if (state.isPlaying) "Pause" else "Play", color = if (state.isPlaying) Color.Black else Color.White, fontSize = 12.sp)
+                        Icon(
+                            imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (state.isPlaying) "Pause" else "Play",
+                            tint = if (state.isPlaying) Color.Black else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
 
-                    // SOUND ON / SOUND OFF TOGGLE BUTTON (Restored from HTML)
+                    // Sound Toggle Icon Button
                     Button(
                         onClick = { viewModel.toggleAudioMute() },
                         colors = ButtonDefaults.buttonColors(containerColor = if (state.isAudioMuted) SurfaceVariant else Color(0xFF1E1B4B)),
                         border = BorderStroke(1.dp, if (state.isAudioMuted) BorderColor else AccentBlue),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.weight(1.1f)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                        modifier = Modifier.weight(0.9f)
                     ) {
-                        Text(
-                            text = if (state.isAudioMuted) "🔇 Sound OFF" else "🔊 Sound ON",
-                            color = if (state.isAudioMuted) Color.LightGray else AccentBlue,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                        Icon(
+                            imageVector = if (state.isAudioMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                            contentDescription = if (state.isAudioMuted) "Unmute" else "Mute",
+                            tint = if (state.isAudioMuted) Color.LightGray else AccentBlue,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
+                    // Step Back Icon Button (-1)
                     Button(
                         onClick = { viewModel.stepFrame(-1) },
                         colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
                         shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         modifier = Modifier.weight(0.9f)
                     ) {
-                        Text("-1 Frame", color = Color.White, fontSize = 11.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.SkipPrevious, contentDescription = "Step Back", tint = Color.White, modifier = Modifier.size(16.dp))
+                            Text("-1", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
+
+                    // Step Forward Icon Button (+1)
                     Button(
                         onClick = { viewModel.stepFrame(1) },
                         colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariant),
                         shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         modifier = Modifier.weight(0.9f)
                     ) {
-                        Text("+1 Frame", color = Color.White, fontSize = 11.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("+1", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Default.SkipNext, contentDescription = "Step Forward", tint = Color.White, modifier = Modifier.size(16.dp))
+                        }
                     }
+
+                    // Scan Current Frame Icon Button
                     Button(
                         onClick = { viewModel.scanCurrentFrame() },
                         colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
                         shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         modifier = Modifier.weight(1.1f)
                     ) {
-                        Text("Scan #${state.currentFrameIndex}", color = Color.White, fontSize = 11.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Default.CenterFocusStrong, contentDescription = "Scan", tint = Color.White, modifier = Modifier.size(17.dp))
+                            Text("#${state.currentFrameIndex}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -347,7 +387,10 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Choose Video or Screenshot", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.VideoFile, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Text("Choose Video / Media", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
             }
 
             if (state.videoUri != null) {
@@ -401,7 +444,7 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
         }
     }
 
-    // 3. TIMELINE FILMSTRIP (HIGH-PERFORMANCE KEYED LIST WITH HARDWARE BITMAPS)
+    // 3. TIMELINE FILMSTRIP
     if (state.frames.isNotEmpty()) {
         Card(
             colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -423,7 +466,6 @@ private fun StudioViewerTab(viewModel: ToolsViewModel, state: ToolsUiState) {
 
                 val lazyListState = rememberLazyListState()
 
-                // Auto-center filmstrip on active frame during playback and stepping
                 LaunchedEffect(state.currentFrameIndex) {
                     if (state.frames.isNotEmpty()) {
                         val targetIndex = (state.currentFrameIndex - 2).coerceAtLeast(0)
@@ -649,7 +691,6 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onToggle: (
             .border(if (isActive) 2.dp else 1.dp, borderColor, RoundedCornerShape(6.dp))
             .clickable { onClick() }
     ) {
-        // Direct zero-latency hardware bitmap rendering (no Coil cache lookup overhead)
         Image(
             bitmap = frame.thumbBitmap.asImageBitmap(),
             contentDescription = "Frame ${frame.index}",
@@ -689,38 +730,11 @@ private fun FrameThumbnail(frame: ExtractedFrame, isActive: Boolean, onToggle: (
 }
 
 // =========================================================================
-// TAB 2: EXPORT DATA (3-STEP WIZARD)
+// TAB 2: EXPORT DATA WIZARD (REDUNDANT TOP STEP BAR REMOVED)
 // =========================================================================
 @Composable
 private fun ExportDataWizardTab(viewModel: ToolsViewModel, state: ToolsUiState) {
-    // Stepper Navigation Header
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(BgDark, RoundedCornerShape(8.dp))
-            .border(1.dp, BorderColor, RoundedCornerShape(8.dp))
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        listOf("1. 🤖 Gemini AI", "2. 🔍 Auto-Scan ZIP", "3. 📋 Coordinates").forEachIndexed { index, title ->
-            val stepNum = index + 1
-            val isActive = state.wizardStep == stepNum
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (isActive) SurfaceVariant else Color.Transparent)
-                    .border(1.dp, if (isActive) AccentBlue else Color.Transparent, RoundedCornerShape(6.dp))
-                    .clickable { viewModel.setWizardStep(stepNum) }
-                    .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(title, color = if (isActive) AccentBlue else Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-    Spacer(modifier = Modifier.height(10.dp))
-
+    // Redundant top 3-step pill bar removed to eliminate clutter and save vertical screen space
     when (state.wizardStep) {
         1 -> WizardStep1(viewModel, state)
         2 -> WizardStep2(viewModel, state)
@@ -743,20 +757,25 @@ private fun WizardStep1(viewModel: ToolsViewModel, state: ToolsUiState) {
             var modelExpanded by remember { mutableStateOf(false) }
             var selectedModel by remember { mutableStateOf(state.selectedGeminiModel) }
 
-            // Header with Fetch Models Button
+            // Header with Compact Icon-Only Fetch Models Button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("🤖 Google Gemini AI Settings", color = AccentBlue, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Button(
+                IconButton(
                     onClick = { viewModel.fetchGeminiModels(apiKey) },
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                    shape = RoundedCornerShape(4.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(PrimaryBlue, RoundedCornerShape(6.dp))
                 ) {
-                    Text("🔄 Fetch Models", fontSize = 11.sp)
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Fetch Models",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -827,12 +846,13 @@ private fun WizardStep1(viewModel: ToolsViewModel, state: ToolsUiState) {
                 }
 
                 if (state.transcriptCues.isNotEmpty()) {
-                    Button(
+                    IconButton(
                         onClick = { viewModel.downloadTranscriptJson() },
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                        shape = RoundedCornerShape(8.dp)
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(PrimaryBlue, RoundedCornerShape(8.dp))
                     ) {
-                        Text("💾 Download JSON", fontSize = 11.sp)
+                        Icon(Icons.Default.Download, contentDescription = "Download JSON", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -865,7 +885,6 @@ private fun WizardStep2(viewModel: ToolsViewModel, state: ToolsUiState) {
     var zipTimeSlotExpanded by remember { mutableStateOf(false) }
     var audioCueExpanded by remember { mutableStateOf(false) }
 
-    // Use rememberUpdatedState so launcher always reads the user's latest typed target word and selected tool
     val currentFilterText by rememberUpdatedState(filterText)
     val currentSelectedTool by rememberUpdatedState(selectedZipTool)
 
@@ -1141,46 +1160,56 @@ private fun WizardStep3(viewModel: ToolsViewModel, state: ToolsUiState) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(10.dp)) {
+            // Shortened Title & Professional Icon Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Active Highlight Coordinates (JSON)", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Button(
+                Text("HC JSON", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Apply to Video Icon Button
+                    IconButton(
                         onClick = { viewModel.applyPastedJson(pastedJson) },
-                        colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
-                        shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(SuccessGreen, RoundedCornerShape(6.dp))
                     ) {
-                        Text("Apply to Video", fontSize = 10.sp)
+                        Icon(Icons.Default.PlayCircle, contentDescription = "Apply to Video", tint = Color.White, modifier = Modifier.size(18.dp))
                     }
-                    Button(
+
+                    // Copy Icon Button
+                    IconButton(
                         onClick = { clipboardManager.setText(AnnotatedString(pastedJson)) },
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                        shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(PrimaryBlue, RoundedCornerShape(6.dp))
                     ) {
-                        Text("Copy", fontSize = 10.sp)
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy JSON", tint = Color.White, modifier = Modifier.size(18.dp))
                     }
-                    Button(
+
+                    // Download Icon Button
+                    IconButton(
                         onClick = { viewModel.downloadCoordinatesJson() },
-                        colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
-                        shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(SuccessGreen, RoundedCornerShape(6.dp))
                     ) {
-                        Text("Download", fontSize = 10.sp)
+                        Icon(Icons.Default.Download, contentDescription = "Download JSON", tint = Color.White, modifier = Modifier.size(18.dp))
                     }
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
             
+            // Expanded Spacious JSON Text Editor
             OutlinedTextField(
                 value = pastedJson,
                 onValueChange = { pastedJson = it },
                 placeholder = { Text("Paste or view highlight coordinates here...") },
-                modifier = Modifier.fillMaxWidth().height(180.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(280.dp),
                 textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = AccentBlue),
                 colors = OutlinedTextFieldDefaults.colors(
                     unfocusedContainerColor = BgDark, focusedContainerColor = BgDark,
@@ -1223,7 +1252,7 @@ private fun WizardStep3(viewModel: ToolsViewModel, state: ToolsUiState) {
     }
 }
 
-// Full-Width Diagnostic Log Console
+// Full-Width Diagnostic Log Console with Icon Buttons
 @Composable
 private fun TerminalConsole(viewModel: ToolsViewModel, state: ToolsUiState) {
     val clipboardManager = LocalClipboardManager.current
@@ -1244,23 +1273,35 @@ private fun TerminalConsole(viewModel: ToolsViewModel, state: ToolsUiState) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("🖥️ Diagnostic Log Console", color = Color(0xFF94A3B8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "📋 Copy",
-                    color = AccentBlue,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable {
+            
+            // Icon Action Buttons (Copy & Clear)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                IconButton(
+                    onClick = {
                         val fullLog = state.activeLogEntries.joinToString("\n") { "${it.timestamp} ${it.message}" }
                         clipboardManager.setText(AnnotatedString(fullLog))
-                    }
-                )
-                Text(
-                    text = "🗑️ Clear",
-                    color = Color.Gray,
-                    fontSize = 11.sp,
-                    modifier = Modifier.clickable { viewModel.clearLogs() }
-                )
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy Log",
+                        tint = AccentBlue,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = { viewModel.clearLogs() },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "Clear Log",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
         HorizontalDivider(color = Color(0xFF1E293B))
